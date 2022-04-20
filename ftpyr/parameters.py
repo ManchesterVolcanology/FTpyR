@@ -80,7 +80,8 @@ class Parameters(OrderedDict):
         """
         # Set default column choices
         def_cols = {
-            'all': ['name', 'value', 'vary', 'layer', 'fit_val', 'fit_err'],
+            'all': ['name', 'value', 'vary', 'layer', 'species', 'fit_val',
+                    'fit_err'],
             'basic': ['name', 'value', 'vary']
         }
 
@@ -105,6 +106,10 @@ class Parameters(OrderedDict):
 
         if 'layer' in cols:
             i = cols.index('layer')
+            colwidth[i] = mincolwidth
+
+        if 'species' in cols:
+            i = cols.index('species')
             colwidth[i] = mincolwidth
 
         if 'fit_val' in cols:
@@ -134,6 +139,7 @@ class Parameters(OrderedDict):
             d = {'name': f'{p.name}',
                  'value': f'{p.value:.{precision}g}',
                  'layer': f'{p.layer}',
+                 'species': f'{p.species}',
                  'fit_val': f'{p.fit_val:.{precision}g}',
                  'fit_err': f'{p.fit_err:.{precision}g}',
                  'vary': f'{p.vary}'
