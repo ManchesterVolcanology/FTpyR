@@ -9,65 +9,38 @@ import logging
 import numpy as np
 import xarray as xr
 import pandas as pd
-import spc_spectra as spc
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 
-def read(fname):
-    """Read in a single FTIR spectrum in the .spc format.
+def read_spc(filename):
+    """Read in .spc file.
+
+    Based on the spc_spectra library written by Rohan Isaac:
+    See https://github.com/rohanisaac/spc for details
 
     Parameters
     ----------
-    fname: filename of the .spc file to read
+    filename : str
+        The file to read in
 
     Returns
-    ------
-    numpy array
-        The spectrum wavenumber
-    numpy array
-        The spectrum intensity
-    dict
-        The metadata assossiated with the file
+    -------
+    xarray DataArray
+        Holds the spectrum and metadata
     """
-    # Read the .spc file
-    f = spc.File(fname)
-
-    # Extract spectrum
-    data = f.data_txt()
-
-    # Split data by line
-    data_lines = [d.split('\t') for d in data.split('\n')
-                  if d != '']
-
-    # Parse the spectral data
-    spectrum = np.array(
-        [[float(x), float(y)] for x, y in data_lines]
-    )
-
-    x, y = spectrum.T
-
-    spectrum = xr.DataArray(
-        data=y,
-        coords={'Wavenumber': x},
-        attrs=f.__dict__
-    )
-
-    return spectrum
-
-
-def read_spc(filename, header_size=512):
     # Read in the binary file
     with open(filename, "rb") as r:
         content = r.read()
 
     # Create a dictionary to hold the metadata
-    metadata = {}
+    metadata = {'filename': filename}
 
     # File setup ==============================================================
 
     # Parse the header data
+    header_size = 512
     hdata = struct.unpack(
         "<cccciddicccci9s9sh32s130s30siicchf48sfifc187s",
         content[:header_size]
@@ -227,8 +200,135 @@ def read_spc(filename, header_size=512):
     return spectrum
 
 
-if __name__ == '__main__':
-    fname = 'F:/FieldData/2018 01 Masaya & Santiaguito/11-01-2018/Summit/' \
-            'FTIR/2018_01_11/2018_01_11_1117_27_069_sbm.spc'
+def read_spectacle(filename):
+    """."""
+    # Read in the binary file
+    with open(filename, "rb") as r:
+        content = r.read()
 
-    spectrum = read_spc(fname)
+    # Create a dictionary to hold the metadata
+    metadata = {'filename': filename}
+
+    # File setup ==============================================================
+
+    # Parse the header data
+    header_size = 512
+    hdata = struct.unpack(
+        "<6sddd88s17s175sl198s",
+        content[:header_size]
+    )
+
+    # Unpack the desired variables
+    wn_start = float(hdata[1])
+    wn_stop = float(hdata[2])
+    # wn_step = float(hdata[3])
+    date_str = hdata[5].replace(b'\x00', b' ').decode("utf-8")
+    npts = int(hdata[7])
+
+    # Parse the timestamp
+    ts = datetime.strptime(date_str, "%d/%m/%y %H:%M:%S")
+    metadata['timestamp'] = str(pd.Timestamp(ts))
+
+    # Get data size (4 bytes per point)
+    data_size = (4 * npts)
+
+    # Get the spectrum data
+    file_pos = 512
+    spec_data = content[file_pos:file_pos+data_size]
+    ydata = np.array(
+        [yi for yi in struct.iter_unpack('<i', spec_data)]
+    ).flatten()
+    # ydata = ydata / np.nanmax(ydata)
+
+    # Calculate the wavenuer grid
+    xdata = np.linspace(wn_start, wn_stop, num=npts)
+
+    # Form the output DataArray
+    spectrum = xr.DataArray(
+        data=ydata,
+        coords={'Wavenumber': xdata},
+        attrs=metadata
+    )
+
+    return spectrum
+
+
+def read_sbm(filename):
+    """."""
+    raise ValueError('Read function not implemented yet!')
+
+
+def read_cerburus(filename):
+    """."""
+    raise ValueError('Read function not implemented yet!')
+
+
+def read_bruker(filename):
+    """."""
+    raise ValueError('Read function not implemented yet!')
+
+
+def read_sb(filename):
+    """."""
+    raise ValueError('Read function not implemented yet!')
+
+
+def read_ifg(filename):
+    """."""
+    raise ValueError('Read function not implemented yet!')
+
+
+# Define file types and read functions based on extension
+filetype_dict = {
+    'Midac Essential': read_sbm,
+    'Midac TuHH': read_cerburus,
+    'Bruker OPUS': read_bruker,
+    'Midac AUTOQUANT': read_sb,
+    'Midac Spectacle': read_spectacle,
+    'Essential interferogram': read_ifg,
+    'Essential spectrum': read_spc
+}
+
+extension_dict = {
+    '.sbm': 'Midac Essential',
+    '.hsi': 'Midac TuHH',
+    '.0': 'Bruker OPUS',
+    '.sb': 'Midac AUTOQUANT',
+    '.rsb': 'Midac AUTOQUANT',
+    '.irs': 'Midac Spectacle',
+    '.ifg': 'Essential interferogram',
+    '.spc': 'Essential spectrum'
+}
+
+
+def read_spectrum(filename, file_type=None):
+    """."""
+    # Ensure the filename used UNIX slashes
+    filename = filename.replace('\\', '/')
+
+    # If a file type is not give, infer from the extension
+    if file_type is None:
+
+        # Get the file extension
+        file, extension = os.path.splitext(filename)
+
+        # Assign the file type
+        file_type = extension_dict[extension.lower()]
+
+    # Assign the correct read function
+    read_func = filetype_dict[file_type]
+
+    # Read in the spectrum
+    spectrum = read_func(filename)
+
+    return spectrum
+
+
+if __name__ == '__main__':
+    fname = 'F:/FieldData/1998_Masaya_FTIR/03MAR98/AI033001.IRS'
+
+    spectrum = read_spectacle(fname)
+
+    import matplotlib.pyplot as plt
+    plt.plot(spectrum.coords['Wavenumber'], spectrum.to_numpy())
+    plt.show()
