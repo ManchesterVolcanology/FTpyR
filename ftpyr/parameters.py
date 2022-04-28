@@ -9,13 +9,16 @@ class Parameters(OrderedDict):
     def __init__(self, *args, **kwargs):
         self.update(*args, **kwargs)
 
-    def add(self, name, value=0.0, vary=True, species=None, layer=None):
+    def add(self, name, value=0.0, vary=True, species=None, path=None,
+            pres=None, temp=None):
         """."""
         self.__setitem__(name, Parameter(name=name,
                                          value=value,
                                          vary=vary,
                                          species=species,
-                                         layer=layer))
+                                         path=path,
+                                         pres=pres,
+                                         temp=temp))
 
     def extract_gases(self, layer_key=None):
         """Return only gas parameters based on layer key."""
@@ -59,7 +62,7 @@ class Parameters(OrderedDict):
         """Return a deep copy of the Parameters object."""
         return copy.deepcopy(self)
 
-    def pretty_print(self, mincolwidth=7, precision=4, cols='basic'):
+    def pretty_print(self, mincolwidth=8, precision=4, cols='basic'):
         """Print the parameters in a nice way.
 
         Parameters
@@ -80,8 +83,8 @@ class Parameters(OrderedDict):
         """
         # Set default column choices
         def_cols = {
-            'all': ['name', 'value', 'vary', 'layer', 'species', 'fit_val',
-                    'fit_err'],
+            'all': ['name', 'value', 'vary', 'species', 'temp',
+                    'pres', 'path', 'fit_val', 'fit_err'],
             'basic': ['name', 'value', 'vary']
         }
 
@@ -89,7 +92,7 @@ class Parameters(OrderedDict):
         if cols == 'all' or cols == 'basic':
             cols = def_cols[cols]
 
-        colwidth = [mincolwidth] * (len(cols))
+        colwidth = np.zeros(len(cols))
 
         if 'name' in cols:
             i = cols.index('name')
@@ -104,13 +107,24 @@ class Parameters(OrderedDict):
             i = cols.index('vary')
             colwidth[i] = mincolwidth
 
-        if 'layer' in cols:
-            i = cols.index('layer')
-            colwidth[i] = mincolwidth
-
         if 'species' in cols:
             i = cols.index('species')
-            colwidth[i] = mincolwidth
+            colwidth[i] = max([len(str(p.species)) for p in self.values()]) + 2
+
+        if 'temp' in cols:
+            i = cols.index('temp')
+            colwidth[i] = max([len(f'{p.temp:.{precision}g}')
+                               for p in self.values()]) + 2
+
+        if 'pres' in cols:
+            i = cols.index('pres')
+            colwidth[i] = max([len(f'{p.pres:.{precision}g}')
+                               for p in self.values()]) + 2
+
+        if 'path' in cols:
+            i = cols.index('path')
+            colwidth[i] = max([len(f'{p.path:.{precision}g}')
+                               for p in self.values()]) + 2
 
         if 'fit_val' in cols:
             i = cols.index('fit_val')
@@ -122,27 +136,32 @@ class Parameters(OrderedDict):
             colwidth[i] = max([len(f'{p.fit_err:.{precision}g}')
                                for p in self.values()]) + 2
 
-        for n, w in enumerate(colwidth):
-            if w < mincolwidth:
-                colwidth[n] = mincolwidth
+        # Make sure no widths are below the minimum
+        colwidth = [int(mincolwidth) if colwidth[i] < mincolwidth
+                    else int(colwidth[i])
+                    for i in range(len(cols))]
 
-        # Generate the string
+        # Generate the title string
         title = ''
         for n, c in enumerate(cols):
             title += f'|{c:^{colwidth[n]}}'
         title += '|'
 
+        # Generate the header row
         msg = f'\n{"MODEL PARAMETERS":^{len(title)}}\n{title}\n' + \
               f'{"-"*len(title)}\n'
 
+        # Write a row for each parameter
         for name, p in self.items():
             d = {'name': f'{p.name}',
                  'value': f'{p.value:.{precision}g}',
-                 'layer': f'{p.layer}',
+                 'vary': f'{p.vary}',
                  'species': f'{p.species}',
+                 'temp': f'{p.temp:.{precision}g}',
+                 'pres': f'{p.pres:.{precision}g}',
+                 'path': f'{p.path:.{precision}g}',
                  'fit_val': f'{p.fit_val:.{precision}g}',
-                 'fit_err': f'{p.fit_err:.{precision}g}',
-                 'vary': f'{p.vary}'
+                 'fit_err': f'{p.fit_err:.{precision}g}'
                  }
 
             for col in cols:
@@ -156,19 +175,25 @@ class Parameters(OrderedDict):
 class Parameter(object):
     """."""
 
-    def __init__(self, name, value, vary=True, species=None, layer=None):
+    def __init__(self, name, value, vary=True, species=None, path=None,
+                 pres=None, temp=None):
         """."""
         self.name = str(name)
         self.value = float(value)
         self.vary = bool(vary)
         if species is not None:
-            self.species = str(species).upper()
-            self.layer = str(layer)
+            self.species = str(species)
+            self.path = float(path)
+            self.pres = float(pres)
+            self.temp = float(temp)
             self.original_od = None
             self.original_amt = None
+            self.xsec_od = None
         else:
             self.species = None
-            self.layer = None
+            self.temp = np.nan
+            self.pres = np.nan
+            self.path = np.nan
 
         self.fit_val = np.nan
         self.fit_err = np.nan
