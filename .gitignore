@@ -3,6 +3,9 @@
 *.csv
 *.config
 *.out
+*scratch*
+*.yml
+*.yaml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
