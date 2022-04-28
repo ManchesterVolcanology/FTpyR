@@ -2,6 +2,7 @@ import os
 import yaml
 import logging
 import numpy as np
+import xarray as xr
 from subprocess import Popen, PIPE, CalledProcessError
 
 logger = logging.getLogger(__name__)
@@ -27,12 +28,14 @@ class RFM(object):
     hitran_path : str
         The path to the HITRAN line database, relative to the RFM working
         directory
+    plume_path_length : float
+        The path length through the volcanic plume layer in meters
     wn_start : float
         The start wavenumber of the fit window in cm-1
     wn_stop : float
         The end wavenumber of the fit window in cm-1
-    plume_path_length : float
-        The path length through the volcanic plume layer in meters
+    wn_pad : float, optional
+        The padding of the fit window in cm-1. Default is 50cm-1
     atmos_path_length : float, optional
         The physical path length through the atmosphere layer in meters. Not
         required if solar_flag is True. Default is None
@@ -42,6 +45,8 @@ class RFM(object):
     obs_height : float, optional
         The altitude of the instrument in meters above sea level, used if
         solar_flag is True. Default is None
+    npts+per_cm : int, optional
+        The number of points per cm-1 in the forward model. Default is 100
 
     Methods
     -------
@@ -49,11 +54,9 @@ class RFM(object):
         Calculate the gas optical depths
     """
 
-    npts_per_cm = 100
-
-    def __init__(self, exe_path, hitran_path, wn_start, wn_stop,
-                 plume_path_length, atmos_path_length=None, solar_flag=False,
-                 obs_height=None):
+    def __init__(self, exe_path, hitran_path, wn_start, wn_stop, wn_pad=50,
+                 solar_flag=False, obs_height=0.0, rfm_id=None,
+                 npts_per_cm=100):
         """."""
         # Assign object variables =============================================
         self.exe_path = str(exe_path)
@@ -61,21 +64,25 @@ class RFM(object):
         self.hitran_path = str(hitran_path)
         self.wn_start = float(wn_start)
         self.wn_stop = float(wn_stop)
-        self.plume_path_length = plume_path_length
+        self.wn_pad = float(wn_pad)
         self.solar_flag = bool(solar_flag)
-        if obs_height is None:
-            self.obs_height = None
-        else:
-            self.obs_height = float(obs_height)
-        if atmos_path_length is None:
-            self.atmos_path_length = None
-        else:
-            self.atmos_path_length = float(atmos_path_length)
+        self.npts_per_cm = int(npts_per_cm)
+        self.obs_height = float(obs_height)
 
         # Perform input checks ================================================
         # Check the RFM working directory isn't the current one
         if self.wd == '':
             self.wd = '.'
+
+        # Make sure the cache folder exists
+        self.cache_folder = f'{self.wd}/cache'
+        if not os.path.isdir(self.cache_folder):
+            os.makedirs(self.cache_folder)
+
+        if rfm_id is None:
+            self.rfm_id = ''
+        else:
+            self.rfm_id = str(rfm_id)
 
         # Check the the start wavenumber is smaller than the end
         if self.wn_start >= self.wn_stop:
@@ -83,77 +90,112 @@ class RFM(object):
                 'Start wavenumber must be lower than stop wavenumber!'
             )
 
-        # If solar flag is on then the altitude must be specified
-        if self.solar_flag and self.obs_height is None:
-            logger.error('Observation height must be defined for solar mode!')
-
-        # If not in solar mode then check an atmosphere path length is given
-        if not self.solar_flag and self.atmos_path_length is None:
-            logger.error('Atmosphere path length must be defined!')
-
-        # Calculate the model x-grid ==========================================
-        # This includes a 1 cm-1 padding on either side to allow shifts
-        self.xgrid_npts = self.npts_per_cm*((wn_stop - wn_start) + 2) + 1
-        self.xgrid = np.linspace(wn_start-1, wn_stop+1, self.xgrid_npts)
-
-    def calc_optical_depths(self, params, plume_pres, plume_temp, atmos_pres,
-                            atmos_temp):
+    def calc_optical_depths(self, params):
         """Calculate gas optical depths using RFM.
 
         Parameters
         ----------
         params : parameters.Parameters object
             Contains the fit parameters used in the retrieval
-        plume_pres : float
-            The pressure of the plume layer in mb
-        plume_temp : float
-            The temperature of the plume layer in K
-        atmos_pres : float
-            The pressure of the atmos layer in mb
-        atmos_temp : float
-            The temperature of the atmos layer in K
 
         Returns
         -------
+        Parameters object
+            A copy of the input parameters, with the original_od and
+            original_amt variables populated from the RFM run
         """
         # Extract the gas parameters from the main Parameters
         gas_params = params.extract_gases()
 
         # Iterate through the desired gases
+        logger.info('Calculating gas optical depths')
         for i, [name, gas] in enumerate(gas_params.items()):
 
-            # Get the temperature and pressure, depending on whether plume or
-            # atmos
-            if gas.layer == 'plume':
-                pressure, temperature = plume_pres, plume_temp
-            elif gas.layer == 'atmos':
-                pressure, temperature = atmos_pres, atmos_temp
-            else:
-                logger.error(f'Parameter {gas.name} layer ({gas.layer}) '
-                             'not recognised!')
+            # Form cache filename
+            wn_lo_limit = self.wn_start - self.wn_pad
+            wn_hi_limit = self.wn_stop + self.wn_pad
+            fname = f'{gas.species}_' \
+                    f'{wn_lo_limit:.1f}_{wn_hi_limit:.1f}_' \
+                    f'{gas.pres:.1f}_{gas.temp:.1f}_{gas.path}_' \
+                    f'{self.npts_per_cm}'
+            fname = fname.replace('.', 'p') + '.nc'
 
-            # Write the atmosphere profile and driver table for this gas
-            self._write_profile(pressure, temperature)
-            self._write_driver_table(gas)
+            # Generate a flag to control if the calculation is run or not
+            calc_od_flag = True
 
-            # Execute RFM
-            with Popen(self.exe_path, stdout=PIPE, bufsize=1,
-                       universal_newlines=True, cwd=self.wd) as proc:
-                for line in proc.stdout:
-                    logger.debug(line)
+            # If the cache file exists, read it in. Otherwise run RFM
+            cache_fname = f'{self.cache_folder}/{fname}'
+            if os.path.isfile(cache_fname):
+                logger.info(f'Cache file found for {gas.species}')
+                with xr.open_dataarray(cache_fname) as da:
 
-            # Report error in case of a failure
-            if proc.returncode != 0:
-                logger.error('Error running RFM!')
-                raise CalledProcessError(proc.returncode, proc.args)
+                    # Check that the precise temperature, pressure and window
+                    # match the requested ones
+                    checks = np.array(
+                        [
+                            gas.temp == da.attrs['temperature_k'],
+                            gas.pres == da.attrs['pressure_mb'],
+                            gas.species == da.attrs['species'],
+                            wn_lo_limit == da.attrs['wn_lo_limit'],
+                            wn_hi_limit == da.attrs['wn_hi_limit']
+                        ]
+                    )
 
-            # Read in the RFM results
-            wn_grid, od = self._read_od_output()
-            path_amt = self._read_path_output(gas)
+                    if checks.all():
+                        od = da.to_numpy()
+                        path_amt = da.attrs['path_amt']
+                        calc_od_flag = False
 
-            # Set the optical depth and path_amt to the gas parameter
+                    else:
+                        logger.info('Consistency check failed, '
+                                    're-calculating optical depth')
+
+            if calc_od_flag:
+
+                # Write the atmosphere profile and driver table for this gas
+                self._write_profile(gas.pres, gas.temp)
+                self._write_driver_table(gas)
+
+                logger.info(f'Running RFM for {gas.species} '
+                            f'at {gas.temp:.1f}K, {gas.pres:.1f}mb')
+
+                # Execute RFM
+                with Popen(self.exe_path, stdout=PIPE, bufsize=1,
+                           universal_newlines=True, cwd=self.wd) as proc:
+                    for line in proc.stdout:
+                        logger.debug(line)
+
+                # Report error in case of a failure
+                if proc.returncode != 0:
+                    logger.error('Error running RFM!')
+                    raise CalledProcessError(proc.returncode, proc.args)
+
+                # Read in the RFM results
+                wn_grid, od = self._read_od_output()
+                path_amt = self._read_path_output(gas.species)
+
+                # Form as a dataarray and save to the cache file
+                da = xr.DataArray(
+                    data=od,
+                    coords={'Wavenumber': wn_grid},
+                    attrs={
+                        'path_amt': path_amt,
+                        'path_amt_units': 'molecules.cm-2',
+                        'wavenumber_units': 'cm-1',
+                        'temperature_k': gas.temp,
+                        'pressure_mb': gas.pres,
+                        'species': gas.species,
+                        'wn_lo_limit': wn_lo_limit,
+                        'wn_hi_limit': wn_hi_limit
+                    }
+                )
+                da.to_netcdf(cache_fname)
+
+            # Set the optical depth and path_amt for the gas parameter
             params[gas.name].original_od = od
+            params[gas.name].value = path_amt
             params[gas.name].original_amt = path_amt
+            params[gas.name].xsec_od = od / path_amt
 
         return params
 
@@ -161,27 +203,32 @@ class RFM(object):
         """."""
         # Set up strings depending on the mode
         # If running plume gas then write the plume info
-        if gas.layer == 'plume':
-            head_str = 'Single layer atmosphere calculation\n'
-            flag_str = 'HOM OPT CTM MIX PTH'
-            atm_str = 'atm\\layer.atm'
-            tan_str = f'{self.plume_path_length/1000}'
+        # if gas.layer == 'plume':
+        #     head_str = 'Single layer atmosphere calculation\n'
+        #     flag_str = 'HOM OPT CTM MIX PTH'
+        #     atm_str = 'atm/layer.atm'
+        #     tan_str = f'{self.plume_path_length/1000}'
+        #
+        # # Otherwise write the atmosphere info, either for solar or layer mode
+        # else:
+        #     if self.solar_flag:
+        #         head_str = '50-layer Earth atmosphere calculation\n'
+        #         flag_str = 'ZEN OBS OPT CTM MIX PTH'
+        #         atm_str = 'atm/mid_lat_summer.atm'
+        #         tan_str = '1.0'
+        #     else:
+        #         head_str = 'Single layer atmosphere calculation\n'
+        #         flag_str = 'HOM OPT CTM MIX PTH'
+        #         atm_str = 'atm/layer.atm'
+        #         tan_str = f'{self.atmos_path_length/1000}'
 
-        # Otherwise write the atmosphere info, either for solar or layer mode
-        else:
-            if self.solar_flag:
-                head_str = '50-layer Earth atmosphere calculation\n'
-                flag_str = 'ZEN OBS OPT CTM MIX PTH'
-                atm_str = 'atm\\mid_lat_summer.atm'
-                tan_str = '1.0'
-            else:
-                head_str = 'Single layer atmosphere calculation\n'
-                flag_str = 'HOM OPT CTM MIX PTH'
-                atm_str = 'atm\\layer.atm'
-                tan_str = f'{self.atmos_path_length/1000}'
+        head_str = 'Single layer atmosphere calculation\n'
+        flag_str = 'HOM OPT CTM MIX PTH'
+        atm_str = 'atm/layer.atm'
+        tan_str = f'{gas.path/1000}'
 
         # Open the driver file
-        with open(f'{self.wd}\\rfm.drv', 'w') as rfmdrv:
+        with open(f'{self.wd}/rfm.drv', 'w') as rfmdrv:
             # Write the title
             rfmdrv.write('! RFM driver table for transmittance calculation\n')
 
@@ -192,8 +239,9 @@ class RFM(object):
             rfmdrv.write(f'*FLG\n{flag_str}\n')
 
             # Write grid details: start wavenumber, stop wavenumber and number
-            # of points/cm-1. Note a 1 cm-1 padding is applied
-            rfmdrv.write(f'*SPC\n{self.wn_start-1} {self.wn_stop+1} '
+            # of points/cm-1
+            rfmdrv.write(f'*SPC\n{self.wn_start - self.wn_pad} '
+                         f'{self.wn_stop + self.wn_pad} '
                          f'{self.npts_per_cm}\n')
 
             # Write gas name
@@ -208,6 +256,11 @@ class RFM(object):
             # If solar, write the observer hight in km
             if self.solar_flag:
                 rfmdrv.write(f'*OBS\n{self.obs_height/1000}\n')
+
+            # Write output filenames
+            rfmdrv.write('*OUT\n  '
+                         f'OPTFIL=rfm{self.rfm_id}.out\n  '
+                         f'PTHFIL=rfm_pth{self.rfm_id}.out\n')
 
             # Write HITRAN file location
             rfmdrv.write(f'*HIT\n{self.hitran_path}\n')
@@ -265,7 +318,11 @@ class RFM(object):
         npts, wn_start, wn_step, wn_stop = [float(s) for s in file_info[:4]]
 
         # Compute the wavelength grid
-        wn_grid = np.linspace(wn_start, wn_stop, int(npts))
+        wn_grid = np.linspace(
+            wn_start,
+            wn_stop,
+            int((wn_stop-wn_start) / wn_step) + 1
+        )
 
         # This is followed by the data, which is split by whitespace across
         # multiple rows
@@ -307,7 +364,7 @@ class RFM(object):
         path_amt = path_data['Amt[kmol/cm2]'] * 6.02205e26
 
         # Check the gas name is the one expected
-        if gas_name.upper() != gas.species.upper():
+        if gas_name.upper() != gas.upper():
             logger.error(
                 f'RFM output gas {gas_name.upper()} does not match requested '
                 + f'{gas.species}!'
