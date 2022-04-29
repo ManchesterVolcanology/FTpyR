@@ -4,23 +4,25 @@ import sys
 import yaml
 import time
 import logging
+import warnings
 import traceback
 import qdarktheme
 import numpy as np
 import pyqtgraph as pg
 from functools import partial
 from PySide6.QtGui import QIcon, QAction
-from PySide6.QtCore import (Qt, QObject, QThread, Signal, Slot,
-                            QThreadPool, QRunnable)
+from PySide6.QtCore import Qt, QObject, Signal, Slot, QThreadPool, QRunnable
 from PySide6.QtWidgets import (QMainWindow, QScrollArea, QGridLayout,
                                QApplication, QToolBar, QFrame, QSplitter,
                                QProgressBar, QLabel, QLineEdit, QTextEdit,
                                QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox,
                                QPlainTextEdit, QPushButton, QFileDialog,
-                               QWidget, QTabWidget, QDialog, QHBoxLayout,
-                               QTableWidget, QTableWidgetItem, QMenu)
+                               QWidget, QTabWidget, QDialog, QTableWidget,
+                               QTableWidgetItem, QMenu)
 
 from ftpyr.read import read_spectrum
+from ftpyr.analyse import Analyser
+from ftpyr.parameters import Parameters
 
 
 __version__ = '0.1.0'
@@ -34,6 +36,7 @@ __author__ = 'Ben Esse'
 
 # Connect to the logger
 logger = logging.getLogger()
+warnings.filterwarnings('ignore')
 
 
 class Signaller(QObject):
@@ -240,9 +243,16 @@ class MainWindow(QMainWindow):
 
         # File selection ======================================================
 
-        filetab = QWidget()
-        self.inputTabHolder.addTab(filetab, 'Global Setup')
-        file_layout = QGridLayout(filetab)
+        globalTabs = QTabWidget()
+        self.inputTabHolder.addTab(globalTabs, 'Global Setup')
+
+        # Add tabs
+        fileTab = QWidget()
+        globalTabs.addTab(fileTab, 'File Setup')
+
+        # Add layout
+        file_layout = QGridLayout(fileTab)
+        file_layout.setAlignment(Qt.AlignTop)
 
         # Add an input for the save selection
         file_layout.addWidget(QLabel('Output\nFolder:'), 0, 0)
@@ -261,6 +271,10 @@ class MainWindow(QMainWindow):
         self.widgets['spec_fnames'] = QTextEdit()
         self.widgets['spec_fnames'].setToolTip('Measurement spectrum files')
         file_layout.addWidget(self.widgets['spec_fnames'], 1, 1, 1, 3)
+        self.widgets['spec_fnames'].textChanged.connect(
+            self.plot_first_spectrum
+        )
+        self.first_filename = ''
         btn = QPushButton('Browse')
         btn.setFixedSize(70, 25)
         btn.clicked.connect(
@@ -292,9 +306,48 @@ class MainWindow(QMainWindow):
         )
         file_layout.addWidget(btn, 3, 4)
 
+        # Spectrometer setup ==================================================
+
+        # Add tab
+        specTab = QWidget()
+        globalTabs.addTab(specTab, 'Spectrometer')
+
+        # Add layout
+        spec_layout = QGridLayout(specTab)
+        spec_layout.setAlignment(Qt.AlignTop)
+
+        # Input for apodization function
+        spec_layout.addWidget(QRightLabel('Apodization\nFunction'), 0, 0)
+        self.widgets['apod_function'] = QComboBox()
+        self.widgets['apod_function'].addItems(
+            ['NB_weak', 'NB_medium', 'NB_strong', 'triangular', 'boxcar']
+        )
+        self.widgets.set('apod_function', 'NB_medium')
+        spec_layout.addWidget(self.widgets['apod_function'], 0, 1)
+
+        # Input for fov
+        spec_layout.addWidget(QRightLabel('Field of View\n(radians)'), 0, 2)
+        self.widgets['fov'] = DSpinBox(0.01, [0, 1], 0.01)
+        spec_layout.addWidget(self.widgets['fov'], 0, 3)
+        self.widgets['fit_fov'] = QCheckBox('Fit?')
+        self.widgets['fit_fov'].setChecked(False)
+        spec_layout.addWidget(self.widgets['fit_fov'], 0, 4)
+
+        # Input for zero filling
+        spec_layout.addWidget(QRightLabel('Zero Filling\nFactor'), 1, 0)
+        self.widgets['zero_fill_factor'] = SpinBox(0, [0, 100])
+        spec_layout.addWidget(self.widgets['zero_fill_factor'], 1, 1)
+
+        # Input for OPD
+        spec_layout.addWidget(
+            QRightLabel('Optical Path\nDifference (cm)'), 1, 2)
+        self.widgets['opd'] = DSpinBox(1.6, [0, 100], 0.01)
+        spec_layout.addWidget(self.widgets['opd'], 1, 3)
+
     def _createLogs(self):
         """Generate program log widgets."""
         layout = QGridLayout(self.logFrame)
+        layout.setAlignment(Qt.AlignTop)
 
         # Add button to begin analysis
         self.start_btn = QPushButton('Begin!')
@@ -362,8 +415,21 @@ class MainWindow(QMainWindow):
         ax2 = self.graphwins['main'].addPlot(row=1, col=1)  # Ratio plot 2
 
         # Generate plot lines
-        pen0 = pg.mkPen(color=self.PLOTCOLORS[0], width=1.0)
+        pen0 = pg.mkPen(color=self.PLOTCOLORS[0], width=0.8)
         l0 = ax0.plot(pen=pen0)
+
+        # Add axes labels
+        ax0.setLabel('left', 'Intensity (counts)')
+        ax0.setLabel('bottom', 'Wavenumber (cm-1)')
+
+        self.widgets['ratio1x'] = QComboBox()
+        self.widgets['ratio1y'] = QComboBox()
+        self.widgets['ratio2x'] = QComboBox()
+        self.widgets['ratio2y'] = QComboBox()
+
+        for ax in [ax0, ax1, ax2]:
+            ax.setDownsampling(mode='peak')
+            ax.setClipToView(True)
 
         # Store graph objects
         self.plot_axes['main'] = [ax0, ax1, ax2]
@@ -410,61 +476,55 @@ class MainWindow(QMainWindow):
 
         # Setup layout
         layout = QGridLayout(setupTab)
+        layout.setAlignment(Qt.AlignTop)
 
         # Create inputs for the fit window
-        layout.addWidget(QRightLabel('Start\nWavenumber\n(cm-1)'), 0, 0)
+        layout.addWidget(QRightLabel('Start Wavenumber (cm-1)'), 0, 0)
         winWidgets['wn_start'] = SpinBox(0, [0, 1e5])
         layout.addWidget(winWidgets['wn_start'], 0, 1)
-        layout.addWidget(QRightLabel('Stop\nWavenumber\n(cm-1)'), 0, 2)
+        layout.addWidget(QRightLabel('Stop Wavenumber (cm-1)'), 1, 0)
         winWidgets['wn_stop'] = SpinBox(0, [0, 1e5])
-        layout.addWidget(winWidgets['wn_stop'], 0, 3)
-
-        # Input for apodization function
-        layout.addWidget(QRightLabel('Apodization\nFunction'), 1, 0)
-        winWidgets['apod_function'] = QComboBox()
-        winWidgets['apod_function'].addItems(
-            ['NB_weak', 'NB_medium', 'NB_strong', 'triangular', 'boxcar']
-        )
-        winWidgets.set('apod_function', 'NB_medium')
-        layout.addWidget(winWidgets['apod_function'], 1, 1)
-
-        # Input for fov
-        layout.addWidget(QRightLabel('Field of View\n(radians)'), 1, 2)
-        winWidgets['fov'] = DSpinBox(0.01, [0, 1], 0.01)
-        layout.addWidget(winWidgets['fov'], 1, 3)
-        winWidgets['fov_fit'] = QCheckBox('Fit?')
-        winWidgets['fov_fit'].setChecked(True)
-        layout.addWidget(winWidgets['fov_fit'], 1, 4)
-
-        # Input for OPD
-        layout.addWidget(QRightLabel('Optical Path\nDifference (cm)'), 2, 0)
-        winWidgets['opd'] = DSpinBox(1.6, [0, 100], 0.01)
-        layout.addWidget(winWidgets['opd'], 2, 1)
+        layout.addWidget(winWidgets['wn_stop'], 1, 1)
 
         # Input for Offset
-        layout.addWidget(QRightLabel('Zero Offset (%)'), 2, 2)
-        winWidgets['opd'] = DSpinBox(0, [0, 100], 1)
-        layout.addWidget(winWidgets['opd'], 2, 3)
+        layout.addWidget(QRightLabel('Zero Offset (%)'), 2, 0)
+        winWidgets['offset'] = DSpinBox(0, [0, 100], 1)
+        layout.addWidget(winWidgets['offset'], 2, 1)
+        winWidgets['fit_offset'] = QCheckBox('Fit?')
+        winWidgets['fit_offset'].setChecked(True)
+        layout.addWidget(winWidgets['fit_offset'], 2, 2)
 
         # Add parameter tables
-        winWidgets['gasTable'] = paramTable(gasTab, 'param', 450, 400,
+        winWidgets['gasTable'] = paramTable(gasTab, 'param', 420, 200,
                                             self.gas_list.keys())
         winWidgets['shiftTable'] = paramTable(shiftTab, 'poly')
         winWidgets['bgpolyTable'] = paramTable(bgpolyTab, 'poly')
 
+        # Link the parameter table to the plot parameter combobox
+        winWidgets['gasTable'].cellChanged.connect(
+            lambda: self.update_plot_species(name)
+        )
+
         # Create a button to remove the window
         btn = QPushButton('Remove')
         btn.clicked.connect(lambda: self.remFitWindow(name))
-        layout.addWidget(btn, 3, 3)
+        layout.addWidget(btn, 0, 2)
 
         # Outputs tab =========================================================
 
         # Setup layout
         layout = QGridLayout(self.outputTabs[name])
+        layout.setAlignment(Qt.AlignTop)
+
+        # Set control for target species
+        layout.addWidget(QRightLabel('Select species:'), 0, 0)
+        winWidgets['target_species'] = QComboBox()
+        winWidgets['target_species'].addItems([''])
+        layout.addWidget(winWidgets['target_species'], 0, 1)
 
         # Generate the graph window
         graphwin = pg.GraphicsLayoutWidget(show=True)
-        layout.addWidget(graphwin, 0, 0)
+        layout.addWidget(graphwin, 1, 0, 1, 5)
 
         # Generate the plot axes
         ax0 = graphwin.addPlot(row=0, col=0)
@@ -483,9 +543,14 @@ class MainWindow(QMainWindow):
         self.plot_axes[name] = [ax0, ax1, ax2]
         self.plot_lines[name] = [l0, l1, l2, l3, l4]
 
+        # Add axes labels
+        ax0.setLabel('left', 'Intensity (counts)')
+        ax1.setLabel('left', 'Residual (%)')
+        ax2.setLabel('left', 'Optical Depth')
+        ax2.setLabel('bottom', 'Wavenumber (cm-1)')
+
         # Add fit regions to main plot and connect to the wavenumber bounds
-        self.plot_regions[name] = pg.LinearRegionItem([1000, 2000])
-        self.plot_regions[name].setZValue(-1)
+        self.plot_regions[name] = pg.LinearRegionItem([0, 0])
         self.plot_regions[name].setMovable(False)
         self.plot_regions[name].setToolTip(name)
         winWidgets['wn_start'].valueChanged.connect(
@@ -522,13 +587,27 @@ class MainWindow(QMainWindow):
         self.inputTabs[name].setParent(None)
         self.outputTabs[name].setParent(None)
 
-        # Remove from list of windows
-        self.windows.remove(name)
-
         # Remove window from main plot
         self.plot_axes['main'][0].removeItem(self.plot_regions[name])
 
+        # Remove from list of windows
+        self.windows.remove(name)
+        self.inputTabs.pop(name)
+        self.outputTabs.pop(name)
+        self.windowWidgets.pop(name)
+        self.graphwins.pop(name)
+        self.plot_lines.pop(name)
+        self.plot_axes.pop(name)
+        self.plot_regions.pop(name)
+
         logger.info(f'{name} window removed')
+
+    def update_plot_species(self, name):
+        """Update the plot parameter options."""
+        rows = self.windowWidgets[name]['gasTable'].getData()
+        params = [r[0] for r in rows]
+        self.windowWidgets[name]['target_species'].clear()
+        self.windowWidgets[name]['target_species'].addItems(params)
 
     # =========================================================================
     # Analysis loop and slots
@@ -549,7 +628,70 @@ class MainWindow(QMainWindow):
 
         # Generate the thread workers
         for name in self.windows:
-            worker = Worker(name, widgetData)
+
+            windowData = widgetData['fitWindows'][name]
+
+            # Setup the parameters
+            params = Parameters()
+
+            # Add gas parameters
+            for line in windowData['gasTable']:
+                params.add(
+                    name=line[0],
+                    vary=line[1],
+                    species=line[2],
+                    temp=line[3],
+                    pres=line[4],
+                    path=line[5]
+                )
+
+            # Add background parameters
+            for i, line in enumerate(windowData['bgpolyTable']):
+                params.add(name=f'bg_poly{i}', value=line[0], vary=line[1])
+
+            # Add shift parameters
+            for i, line in enumerate(windowData['shiftTable']):
+                params.add(name=f'shift{i}', value=line[0], vary=line[1])
+
+            # Zero offset parameters
+            params.add(
+                name='offset',
+                value=windowData['offset'],
+                vary=windowData['fit_offset']
+            )
+
+            # Add ILS parameters
+            params.add(
+                name='fov',
+                value=widgetData['fov'],
+                vary=widgetData['fit_fov']
+            )
+            params.add(
+                name='opd',
+                value=widgetData['opd'],
+                vary=False
+            )
+
+            # Generate the analyser function
+            logger.info(f'Generating analyser for {name} window')
+            analyser = Analyser(
+                params=params,
+                rfm_path=widgetData['rfm_path'],
+                hitran_path=widgetData['hitran_path'],
+                wn_start=windowData['wn_start'],
+                wn_stop=windowData['wn_stop'],
+                zero_fill_factor=widgetData['zero_fill_factor'],
+                solar_flag=False,
+                obs_height=0.0,
+                update_params=True,
+                residual_limit=50,
+                npts_per_cm=50,
+                apod_function=widgetData['apod_function'],
+                outfile=f"{widgetData['save_dir']}/{name}_output.csv"
+            )
+
+            # raise Exception
+            worker = Worker(name, analyser)
             worker.signals.results.connect(self.get_results)
             worker.signals.error.connect(self.update_error)
             worker.signals.finished.connect(self.analysis_complete)
@@ -590,7 +732,18 @@ class MainWindow(QMainWindow):
     def get_results(self, results):
         """Catch results and flag that worker is ready for next spectrum."""
         # Unpack the results
-        name, resdata = results
+        name, fit = results
+
+        if fit is not None:
+            # Get the plot parameter
+            plot_gas = self.windowWidgets[name].get('target_species')
+
+            # Update the fit plot
+            self.plot_lines[name][0].setData(fit.grid, fit.spec)
+            self.plot_lines[name][1].setData(fit.grid, fit.fit)
+            self.plot_lines[name][2].setData(fit.grid, fit.residual)
+            self.plot_lines[name][3].setData(fit.grid, fit.meas_od[plot_gas])
+            self.plot_lines[name][4].setData(fit.grid, fit.fit_od[plot_gas])
 
         # Update worker ready flag
         self.ready_flag[name] = True
@@ -633,13 +786,25 @@ class MainWindow(QMainWindow):
 
         self.plot_lines['main'][0].setData(x, y)
 
-    def update_window_plots(self, plotData):
-        """Update output plots."""
+    def plot_first_spectrum(self):
+        """Plot first spectrum in list."""
+        try:
+            filename = self.widgets.get('spec_fnames').split('\n')[0]
+            if filename != self.first_filename:
+                self.first_filename = filename
+                spectrum = read_spectrum(filename)
+                x = spectrum.coords['Wavenumber'].to_numpy()
+                y = spectrum.to_numpy()
+                self.plot_lines['main'][0].setData(x, y)
+
+        except Exception:
+            pass
 
     def update_error(self, error):
         """Update error messages from the worker."""
         exctype, value, trace = error
         logger.warning(f'Uncaught exception!\n{trace}')
+        self.stop_analysis()
 
     def update_status(self, status):
         """Update status bar."""
@@ -686,8 +851,8 @@ class MainWindow(QMainWindow):
 
         # Update the relavant widget for a single file
         if type(fname) == str and fname != '':
-            if cwd in fname:
-                fname = fname[len(cwd):]
+            # if cwd in fname:
+            #     fname = fname[len(cwd):]
             widget.setText(fname)
 
         # And for multiple files
@@ -792,29 +957,29 @@ class MainWindow(QMainWindow):
 
             # Apply each config setting
             for label, value in config.items():
-                # try:
-                # Set the fit windows
-                if label == 'fitWindows':
-                    for name, widgets in value.items():
+                try:
+                    # Set the fit windows
+                    if label == 'fitWindows':
+                        for name, widgets in value.items():
 
-                        # Generate the window tabs
-                        self.addFitWindow(name)
+                            # Generate the window tabs
+                            self.addFitWindow(name)
 
-                        for key, val in widgets.items():
+                            for key, val in widgets.items():
 
-                            # Setup the parameter tables
-                            if key in tableKeys:
-                                self.windowWidgets[name][key].setData(val)
-                            else:
-                                self.windowWidgets[name].set(key, val)
+                                # Setup the parameter tables
+                                if key in tableKeys:
+                                    self.windowWidgets[name][key].setData(val)
+                                else:
+                                    self.windowWidgets[name].set(key, val)
 
-                elif label == 'theme':
-                    self.theme = value
+                    elif label == 'theme':
+                        self.theme = value
 
-                else:
-                    self.widgets.set(label, value)
-                # except Exception:
-                #     logger.warning(f'Failed to load {label} from config file')
+                    else:
+                        self.widgets.set(label, value)
+                except Exception:
+                    logger.warning(f'Failed to load {label} from config file')
 
             # Update the config file settings
             self.config_fname = fname
@@ -873,11 +1038,11 @@ class WorkerSignals(QObject):
 class Worker(QRunnable):
     """."""
 
-    def __init__(self, name, widgetData, *args, **kwargs):
+    def __init__(self, name, analyser, *args, **kwargs):
         """."""
         super(Worker, self).__init__()
         self.name = name
-        self.widgetData = widgetData
+        self.analyser = analyser
         self.args = args
         self.kwargs = kwargs
         self.signals = WorkerSignals()
@@ -898,14 +1063,12 @@ class Worker(QRunnable):
 
     def fn(self, name):
         """Main analysis loop."""
-        time.sleep(2.0)
         self.signals.results.emit([name, None])
         while not self.isStopped:
             if self.spectrum is not None and not self.isPaused:
-                resdata = {}
-                time.sleep(1.0)
+                fit = self.analyser.fit(self.spectrum)
                 self.spectrum = None
-                self.signals.results.emit([name, resdata])
+                self.signals.results.emit([name, fit])
             else:
                 time.sleep(0.01)
 
@@ -1161,7 +1324,7 @@ class paramTable(QTableWidget):
 
     def _resize(self):
         """."""
-        self.setColumnWidth(0, 80)
+        self.setColumnWidth(0, 60)
         self.setColumnWidth(1, 50)
         if self._type == 'param':
             self.setColumnWidth(2, 60)

@@ -17,8 +17,8 @@ class Analyser(object):
     def __init__(self, params, rfm_path, hitran_path, wn_start, wn_stop,
                  solar_flag=False, obs_height=0.0, rfm_id=None,
                  update_params=True, residual_limit=None, wn_pad=50,
-                 npts_per_cm=100, apod_function='NB_medium', outfile=None,
-                 tolerance=0.01):
+                 zero_fill_factor=0, npts_per_cm=100,
+                 apod_function='NB_medium', outfile=None, tolerance=0.01):
         """."""
         # Generate the RFM object
         logger.debug('Setting up RFM')
@@ -49,6 +49,9 @@ class Analyser(object):
         self.update_params = update_params
         self.residual_limit = residual_limit
         self.tolerance = tolerance
+
+        # Add zero fill factor
+        self.zero_fill_factor = zero_fill_factor
 
         # Calculate the model x-grid
         # This includes a 1 cm-1 padding on either side to allow shifts
@@ -109,11 +112,11 @@ class Analyser(object):
                     ofile.write(f',{p.name},{p.name}_err')
                 ofile.write('\n')
 
-    def fit(self, spectrum, calc_od='all', zero_fill_factor=0):
+    def fit(self, spectrum, calc_od='all'):
         """."""
         # Apply zero-filling
-        if zero_fill_factor:
-            spectrum = self._zero_fill(spectrum, zero_fill_factor)
+        if self.zero_fill_factor:
+            spectrum = self._zero_fill(spectrum, self.zero_fill_factor)
 
         # Extract the region we are interested in
         full_xgrid = spectrum.coords['Wavenumber'].to_numpy()
@@ -196,7 +199,7 @@ class Analyser(object):
 
         # See if offset is in the parameters
         if 'offset' in p.keys():
-            offset = p['offset']
+            offset = p['offset'] * np.max(self.spec) / 1000
         else:
             offset = 0
 
@@ -277,7 +280,7 @@ class Analyser(object):
 
             c = apod_param_dict[apod_function]
 
-            for i in range(3):
+            for i in range(4):
                 ftir_igm += c[i] * (
                     (1 - (ftir_igm_grid / optical_path_diff)**2)**i
                 )
@@ -393,7 +396,7 @@ class FitResult(object):
         self.nerr = nerr
         self.iter_count = iter_count
         self.meas_od = {}
-        self.synth_od = {}
+        self.fit_od = {}
 
         # Add the fit results to each parameter
         i = 0
@@ -454,7 +457,7 @@ class FitResult(object):
             for par in calc_od:
                 if par in self.params:
                     self.meas_od[par] = np.full(len(self.spec), np.nan)
-                    self.synth_od[par] = np.full(len(self.spec), np.nan)
+                    self.fit_od[par] = np.full(len(self.spec), np.nan)
 
     def calc_od(self, par_name):
         """."""
@@ -490,6 +493,6 @@ class FitResult(object):
 
         # Add to self
         self.meas_od[par_name] = -np.log(np.divide(self.spec-offset, fit))
-        self.synth_od[par_name] = par_od
+        self.fit_od[par_name] = par_od
 
-        return self.meas_od[par_name], self.synth_od[par_name]
+        return self.meas_od[par_name], self.fit_od[par_name]
