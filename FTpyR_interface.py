@@ -33,7 +33,7 @@ __author__ = 'Ben Esse'
 # =============================================================================
 
 # Connect to the logger
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 
 
 class Signaller(QObject):
@@ -330,6 +330,7 @@ class MainWindow(QMainWindow):
         self.handler = QtHandler(self.updateLog)
         self.handler.setFormatter(formatter)
         logger.addHandler(self.handler)
+        logger.setLevel(logging.INFO)
         layout.addWidget(self.logBox, 2, 0, 1, 5)
         logger.info(f'Welcome to FTpyR v{__version__}! Written by Ben Esse')
 
@@ -1213,8 +1214,6 @@ class SpinBox(QSpinBox):
 # =============================================================================
 
 def main():
-    QThread.currentThread().setObjectName('MainThread')
-    logging.getLogger().setLevel(logging.INFO)
     app = QApplication(sys.argv)
     window = MainWindow(app)
     window.show()
@@ -1222,4 +1221,5 @@ def main():
 
 
 if __name__ == '__main__':
+    main()
     main()
