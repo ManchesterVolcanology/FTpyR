@@ -199,7 +199,7 @@ class Analyser(object):
 
         # See if offset is in the parameters
         if 'offset' in p.keys():
-            offset = p['offset'] * np.max(self.spec) / 1000
+            offset = p['offset'] * np.max(self.spec) / 100
         else:
             offset = 0
 
@@ -248,6 +248,9 @@ class Analyser(object):
         """."""
         # Define the total optical path difference as the sampling frequency
         total_opd = self.npts_per_cm
+
+        # Convert fov from milliradians to radians
+        fov = fov / 1000
 
         # Define the total number of points in the ftir igm
         total_igm_npts = int(total_opd * self.npts_per_cm)
@@ -309,7 +312,7 @@ class Analyser(object):
         fov_smooth_factor = int(self.npts_per_cm * fov_width)
 
         # Catch bad smooth factors
-        if fov_smooth_factor < 0 or fov_smooth_factor > n2:
+        if fov_smooth_factor <= 0 or fov_smooth_factor > n2:
             fov_smooth_factor = 5
 
         # Smooth the spc
@@ -468,7 +471,7 @@ class FitResult(object):
         params[par_name].fit_val = 0
         if 'offset' in params.keys():
             offset = params['offset'].fit_val
-            params['offset'].fit_val = 0
+            # params['offset'].fit_val = 0
         else:
             offset = 0
 
