@@ -109,7 +109,7 @@ class Analyser(object):
                     ofile.write(f',{p.name},{p.name}_err')
                 ofile.write('\n')
 
-    def fit(self, spectrum, calc_od=[], zero_fill_factor=0):
+    def fit(self, spectrum, calc_od='all', zero_fill_factor=0):
         """."""
         # Apply zero-filling
         if zero_fill_factor:
@@ -436,6 +436,9 @@ class FitResult(object):
             )
 
             # Calculate optical depth spectra
+            if calc_od == 'all':
+                calc_od = [par.name for par in self.params.values()
+                           if par.species is not None]
             for par in calc_od:
                 if par in self.params:
                     self.calc_od(par)
