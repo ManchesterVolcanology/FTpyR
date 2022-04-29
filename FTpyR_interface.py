@@ -788,6 +788,8 @@ class MainWindow(QMainWindow):
             with open(fname, 'r') as ymlfile:
                 config = yaml.load(ymlfile, Loader=yaml.FullLoader)
 
+            logger.info(f'Loading config from {self.config_fname}')
+
             # Apply each config setting
             for label, value in config.items():
                 # try:
@@ -813,8 +815,6 @@ class MainWindow(QMainWindow):
                     self.widgets.set(label, value)
                 # except Exception:
                 #     logger.warning(f'Failed to load {label} from config file')
-
-            logger.info(f'Config file loaded from {self.config_fname}')
 
             # Update the config file settings
             self.config_fname = fname
@@ -1119,9 +1119,9 @@ class paramTable(QTableWidget):
                 )
                 if index >= 0:
                     self.cellWidget(i, 2).setCurrentIndex(index)
-                self.setItem(i, 3, QTableWidgetItem(line[3]))
-                self.setItem(i, 4, QTableWidgetItem(line[4]))
-                self.setItem(i, 5, QTableWidgetItem(line[5]))
+                self.cellWidget(i, 3).setValue(line[3])
+                self.cellWidget(i, 4).setValue(line[4])
+                self.cellWidget(i, 5).setValue(line[5])
 
             elif self._type == 'poly':
                 self.setItem(i, 0, QTableWidgetItem(str(line[0])))
