@@ -1,6 +1,9 @@
 import copy
+import logging
 import numpy as np
 from collections import OrderedDict
+
+logger = logging.getLogger(__name__)
 
 
 class Parameters(OrderedDict):
