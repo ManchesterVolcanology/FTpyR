@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QMainWindow, QScrollArea, QGridLayout,
                                QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox,
                                QPlainTextEdit, QPushButton, QFileDialog,
                                QWidget, QTabWidget, QDialog, QTableWidget,
-                               QTableWidgetItem, QMenu)
+                               QTableWidgetItem, QMenu, QHeaderView)
 
 from ftpyr.read import read_spectrum
 from ftpyr.analyse import Analyser
@@ -201,6 +201,7 @@ class MainWindow(QMainWindow):
         self.plot_axes = {}
         self.plot_lines = {}
         self.plot_regions = {}
+        self.results_tables = {}
 
         # Read in gas list
         with open('databases/atm_layer.yml', 'r') as ymlfile:
@@ -326,8 +327,8 @@ class MainWindow(QMainWindow):
         spec_layout.addWidget(self.widgets['apod_function'], 0, 1)
 
         # Input for fov
-        spec_layout.addWidget(QRightLabel('Field of View\n(radians)'), 0, 2)
-        self.widgets['fov'] = DSpinBox(0.01, [0, 1], 0.01)
+        spec_layout.addWidget(QRightLabel('Field of View\n(m.rad)'), 0, 2)
+        self.widgets['fov'] = DSpinBox(10, [0, 1000], 1.0)
         spec_layout.addWidget(self.widgets['fov'], 0, 3)
         self.widgets['fit_fov'] = QCheckBox('Fit?')
         self.widgets['fit_fov'].setChecked(False)
@@ -457,7 +458,7 @@ class MainWindow(QMainWindow):
         # Generate the new tabs
         self.inputTabs[name] = QTabWidget()
         self.inputTabHolder.addTab(self.inputTabs[name], name)
-        self.outputTabs[name] = QWidget()
+        self.outputTabs[name] = QTabWidget()
         self.outputTabHolder.addTab(self.outputTabs[name], name)
 
         # Create widget holder
@@ -512,12 +513,20 @@ class MainWindow(QMainWindow):
 
         # Outputs tab =========================================================
 
+        # Make graph and table tabs
+        graphTab = QWidget()
+        tableTab = QWidget()
+        self.outputTabs[name].addTab(graphTab, 'Graphs')
+        self.outputTabs[name].addTab(tableTab, 'Results')
+
+        # Output graphs =======================================================
+
         # Setup layout
-        layout = QGridLayout(self.outputTabs[name])
+        layout = QGridLayout(graphTab)
         layout.setAlignment(Qt.AlignTop)
 
         # Set control for target species
-        layout.addWidget(QRightLabel('Select species:'), 0, 0)
+        layout.addWidget(QRightLabel('Target species:'), 0, 0)
         winWidgets['target_species'] = QComboBox()
         winWidgets['target_species'].addItems([''])
         layout.addWidget(winWidgets['target_species'], 0, 1)
@@ -565,10 +574,23 @@ class MainWindow(QMainWindow):
         )
         self.plot_axes['main'][0].addItem(self.plot_regions[name])
 
+        # Output table ========================================================
+
+        # Generate results table
+        tlayout = QGridLayout(tableTab)
+        resTable = QTableWidget(0, 4)
+        resTable.setHorizontalHeaderLabels(
+            ['Parameter', 'Vary?', 'Fit Value', 'Fit Error'])
+        resTable.horizontalHeader().setStretchLastSection(True)
+        resTable.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+        tlayout.addWidget(resTable, 0, 0)
+
         # Add to overall widgets ==============================================
 
         self.windowWidgets[name] = winWidgets
         self.graphwins[name] = graphwin
+        self.results_tables[name] = resTable
 
         self.windows.append(name)
 
@@ -690,6 +712,9 @@ class MainWindow(QMainWindow):
                 outfile=f"{widgetData['save_dir']}/{name}_output.csv"
             )
 
+            # Initialise the results table
+            self.initialize_results_table(name, analyser.params)
+
             # raise Exception
             worker = Worker(name, analyser)
             worker.signals.results.connect(self.get_results)
@@ -744,6 +769,15 @@ class MainWindow(QMainWindow):
             self.plot_lines[name][2].setData(fit.grid, fit.residual)
             self.plot_lines[name][3].setData(fit.grid, fit.meas_od[plot_gas])
             self.plot_lines[name][4].setData(fit.grid, fit.fit_od[plot_gas])
+
+            # Update results table
+            for i, p in enumerate(fit.params.values()):
+                self.results_tables[name].setItem(
+                    i, 2, QTableWidgetItem(str(p.fit_val))
+                )
+                self.results_tables[name].setItem(
+                    i, 3, QTableWidgetItem(str(p.fit_err))
+                )
 
         # Update worker ready flag
         self.ready_flag[name] = True
@@ -812,6 +846,19 @@ class MainWindow(QMainWindow):
 
     def update_progress(self):
         """Update the progress bar."""
+
+    def initialize_results_table(self, name, params):
+        """Initialize table rows."""
+        # Clear all current rows
+        self.results_tables[name].clearContents()
+
+        # Make the rows
+        self.results_tables[name].setRowCount(len(params.keys()))
+
+        for i, [pname, param] in enumerate(params.items()):
+            self.results_tables[name].setItem(i, 0, QTableWidgetItem(pname))
+            self.results_tables[name].setItem(
+                i, 1, QTableWidgetItem(str(param.vary)))
 
     # =========================================================================
     # Program Global Slots
@@ -957,29 +1004,29 @@ class MainWindow(QMainWindow):
 
             # Apply each config setting
             for label, value in config.items():
-                try:
-                    # Set the fit windows
-                    if label == 'fitWindows':
-                        for name, widgets in value.items():
+                # try:
+                # Set the fit windows
+                if label == 'fitWindows':
+                    for name, widgets in value.items():
 
-                            # Generate the window tabs
-                            self.addFitWindow(name)
+                        # Generate the window tabs
+                        self.addFitWindow(name)
 
-                            for key, val in widgets.items():
+                        for key, val in widgets.items():
 
-                                # Setup the parameter tables
-                                if key in tableKeys:
-                                    self.windowWidgets[name][key].setData(val)
-                                else:
-                                    self.windowWidgets[name].set(key, val)
+                            # Setup the parameter tables
+                            if key in tableKeys:
+                                self.windowWidgets[name][key].setData(val)
+                            else:
+                                self.windowWidgets[name].set(key, val)
 
-                    elif label == 'theme':
-                        self.theme = value
+                elif label == 'theme':
+                    self.theme = value
 
-                    else:
-                        self.widgets.set(label, value)
-                except Exception:
-                    logger.warning(f'Failed to load {label} from config file')
+                else:
+                    self.widgets.set(label, value)
+                # except Exception:
+                #     logger.warning(f'Failed to load {label} from config file')
 
             # Update the config file settings
             self.config_fname = fname
