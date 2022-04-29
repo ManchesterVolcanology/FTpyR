@@ -367,7 +367,7 @@ class RFM(object):
         if gas_name.upper() != gas.upper():
             logger.error(
                 f'RFM output gas {gas_name.upper()} does not match requested '
-                + f'{gas.species}!'
+                + f'{gas}!'
             )
 
         return path_amt
