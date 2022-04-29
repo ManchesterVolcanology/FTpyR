@@ -316,7 +316,7 @@ class Analyser(object):
         # Select the middle, +/- 5 wavenumbers and normalise
         k_size = 5 * self.npts_per_cm
         kernel = spc_fov[n2-k_size:n2+k_size]
-        norm_kernel = kernel/np.sum(kernel)
+        norm_kernel = kernel/np.nansum(kernel)
 
         self.ils = norm_kernel
 
