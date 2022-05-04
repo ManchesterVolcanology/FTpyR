@@ -28,35 +28,29 @@ class RFM(object):
     hitran_path : str
         The path to the HITRAN line database, relative to the RFM working
         directory
-    plume_path_length : float
-        The path length through the volcanic plume layer in meters
     wn_start : float
         The start wavenumber of the fit window in cm-1
     wn_stop : float
         The end wavenumber of the fit window in cm-1
     wn_pad : float, optional
         The padding of the fit window in cm-1. Default is 50cm-1
-    atmos_path_length : float, optional
-        The physical path length through the atmosphere layer in meters. Not
-        required if solar_flag is True. Default is None
     solar_flag : bool, optional
         If True, then calculation is perfromed using a full atmosphere.
         Requires obs_height to be defined. Default is False.
     obs_height : float, optional
         The altitude of the instrument in meters above sea level, used if
         solar_flag is True. Default is None
-    npts+per_cm : int, optional
+    npts_per_cm : int, optional
         The number of points per cm-1 in the forward model. Default is 100
 
     Methods
     -------
-    calc_optical_depths(gases, atmos_pres, atmos_temp, plume_pres, plume_temp)
-        Calculate the gas optical depths
+    calc_optical_depths(parmas)
+        Calculate the gas optical depths using the RFM executable.
     """
 
     def __init__(self, exe_path, hitran_path, wn_start, wn_stop, wn_pad=50,
-                 solar_flag=False, obs_height=0.0, rfm_id=None,
-                 npts_per_cm=100):
+                 solar_flag=False, obs_height=0.0, npts_per_cm=100):
         """."""
         # Assign object variables =============================================
         self.exe_path = str(exe_path)
@@ -78,11 +72,6 @@ class RFM(object):
         self.cache_folder = f'{self.wd}/cache'
         if not os.path.isdir(self.cache_folder):
             os.makedirs(self.cache_folder)
-
-        if rfm_id is None:
-            self.rfm_id = ''
-        else:
-            self.rfm_id = str(rfm_id)
 
         # Check the the start wavenumber is smaller than the end
         if self.wn_start >= self.wn_stop:
@@ -259,8 +248,8 @@ class RFM(object):
 
             # Write output filenames
             rfmdrv.write('*OUT\n  '
-                         f'OPTFIL=rfm{self.rfm_id}.out\n  '
-                         f'PTHFIL=rfm_pth{self.rfm_id}.out\n')
+                         'OPTFIL=rfm.out\n  '
+                         'PTHFIL=rfm_pth.out\n')
 
             # Write HITRAN file location
             rfmdrv.write(f'*HIT\n{self.hitran_path}\n')
