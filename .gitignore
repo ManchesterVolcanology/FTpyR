@@ -8,7 +8,6 @@
 *.yaml
 *.bin
 *.hit
-*RFM*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
