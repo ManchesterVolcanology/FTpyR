@@ -12,14 +12,85 @@ logger = logging.getLogger(__name__)
 
 
 class Analyser(object):
-    """."""
+    """Controls the spectral fit for OP-FTIR spectra.
+
+    Parameters
+    ----------
+    params : parameters.Parameters object
+        Contains the parameter information, including the different gas
+        species, background polynomial, intensity offset, wavenmumber shift,
+        optical path difference and field of view. Note the following parameter
+        names are reserved for specific variables:
+            - *bg_poly*: the background polynomial coefficients
+            - *shift*: the wavenumber shift coefficients
+            - *offset*: the intensity offset coefficients
+            - fov: the spectrometer field of view (milliradians)
+            - opd: the spectrometer optical path difference (in cm)
+        Note also all gas parameters must have a "species" variable defined
+    rfm_path : str
+        The path to the Reference Forward Model executable, either as a full
+        path or with respect to the current working directory
+    hitran_path : str
+        The path to the HITRAN database, either as a full path or with respect
+        to the RFM executable
+    wn_start : float
+        The start wavenumber of the fit window (cm-1)
+    wn_stop : float
+        The stop waveumber of the fit window (cm-1)
+    solar_flag : bool, optional
+        If True, then the calculation assumes a solar occultation measurement.
+        Default is False.
+    obs_height : float, optional
+        The observer height, in meters above sea level. Only used if
+        solar_flag=True. Default is 0.0.
+    update_params : bool, optional
+        If True, then the fit results will be used as the first guess for the
+        next fit. Default is True.
+    residual_limit : float, optional
+        The residual limit to set as a "good" spectrum. Spectra with a max
+        residual greater than residual_limit will have a fit_quality=2 and will
+        not be used as the next first guess (if update_params==True). Default
+        is 10.
+    wn_pad : float, optional
+        The amount of padding of the fit window, in cm-1, to avoid convolution
+        edge effects and allow a wavenumber shift. Default is 50.
+    zero_fill_factor : int, optional
+        If greater than zero then the spectra are zero-filled before analysis
+        to artificially increase the sampling frequency. Increasing numbers
+        use increassing zero-filling, determined by the next_fast_len function
+        of the scipy.fft library. Default is 0.
+    npts_per_cm : int, optional
+        The number of points per cm-1 to use in the model wavenumber grid.
+        Default is 100.
+    apod_function : str, optional
+        The apodisation function to use when generating the instrument ILS.
+        Must be one of triangular, boxcar, NB_weak, NB_medium, NB_strong.
+        Default is NB_medium.
+    outfile : str, optional
+        The output filename. If None, then no file is written. Default is None.
+    tolerance : float, optional
+        The fit tolerance to use in scipy.curve_fit. Default is 0.01.
+    bg_behaviour : str, optional
+        How the background spectrum is handled, if it is provided. Must be
+        either subtract or divide. Default is subtract.
+    bg_spectrum : xarray.DataArray, optional
+        The spectrum to use in the background correction. Default is None.
+
+    Methods
+    -------
+    fit(spectrum, calc_od='all')
+        Fit the provided spectrum
+
+    fwd_model(x, *p0)
+        The forward model used to fit spectra
+    """
 
     def __init__(self, params, rfm_path, hitran_path, wn_start, wn_stop,
-                 solar_flag=False, obs_height=0.0, rfm_id=None,
-                 update_params=True, residual_limit=None, wn_pad=50,
-                 zero_fill_factor=0, npts_per_cm=100,
-                 apod_function='NB_medium', outfile=None, tolerance=0.01):
-        """."""
+                 solar_flag=False, obs_height=0.0, update_params=True,
+                 residual_limit=10, wn_pad=50, zero_fill_factor=0,
+                 npts_per_cm=100, apod_function='NB_medium', outfile=None,
+                 tolerance=0.01, bg_behaviour='subtract', bg_spectrum=None):
+        """Initialise the Analyser."""
         # Generate the RFM object
         logger.debug('Setting up RFM')
         self.rfm = RFM(
@@ -30,7 +101,6 @@ class Analyser(object):
             wn_pad=wn_pad,
             solar_flag=solar_flag,
             obs_height=obs_height,
-            rfm_id=rfm_id,
             npts_per_cm=npts_per_cm
         )
 
@@ -52,6 +122,15 @@ class Analyser(object):
 
         # Add zero fill factor
         self.zero_fill_factor = zero_fill_factor
+
+        # Process the background spectrum
+        self.bg_behaviour = bg_behaviour
+        self.bg_spectrum = bg_spectrum
+
+        # Apply zero-filling to the background if required
+        if self.zero_fill_factor:
+            self.bg_spectrum = self._zero_fill(
+                self.bg_spectrum, self.zero_fill_factor)
 
         # Calculate the model x-grid
         # This includes a 1 cm-1 padding on either side to allow shifts
@@ -110,13 +189,45 @@ class Analyser(object):
                 ofile.write('Filename,Timestamp')
                 for p in params.values():
                     ofile.write(f',{p.name},{p.name}_err')
-                ofile.write('\n')
+                ofile.write(',FitQuality\n')
 
     def fit(self, spectrum, calc_od='all'):
-        """."""
+        """Fit the provided spectrum.
+
+        Parameters
+        ---------
+        spectrum : xarray.DataArray
+            The spectrum to fit. Must be a DataArray with a single coords named
+            Wavenumber and with the following attrs:
+                filename: the spectrum filename
+                timestamp: the spectrum timestamp
+        calc_od : str or list, optional
+            The gas parameters for which to calculate the optical depths. If
+            all, then all gases are calculated. Default is all.
+
+        Returns
+        -------
+        FitResult object
+            Holds the fit results and associated metadata
+        """
         # Apply zero-filling
         if self.zero_fill_factor:
             spectrum = self._zero_fill(spectrum, self.zero_fill_factor)
+
+        # If a background spectrum is given, perform the background correction
+        if self.bg_spectrum is not None:
+            if self.bg_behaviour == 'subtract':
+                spectrum = xr.DataArray(
+                    data=np.subtract(spectrum, self.bg_spectrum),
+                    coords=spectrum.coords,
+                    attrs=spectrum.attrs
+                )
+            elif self.bg_behaviour == 'divide':
+                spectrum = xr.DataArray(
+                    data=np.divide(spectrum, self.bg_spectrum),
+                    coords=spectrum.coords,
+                    attrs=spectrum.attrs
+                )
 
         # Extract the region we are interested in
         full_xgrid = spectrum.coords['Wavenumber'].to_numpy()
@@ -174,12 +285,25 @@ class Analyser(object):
                     ofile.write(f',{p.fit_val},{p.fit_err}')
 
                 # New line
-                ofile.write('\n')
+                ofile.write(f',{fit.nerr}\n')
 
         return fit
 
     def fwd_model(self, x, *p0):
-        """."""
+        """The forward model used to fit the measured spectrum.
+
+        Parameters
+        ----------
+        x : numpy array
+            The wavenumber grid of the measurement (cm-1).
+        *p0 : floats
+            The fitted parameters.
+
+        Returns
+        -------
+        numpy array
+            The fitted model spectrum, interpolated onto the measurement grid
+        """
         # Get dicitionary of fitted parameters
         p = self.params.valuesdict()
 
@@ -196,12 +320,7 @@ class Analyser(object):
         # Unpack polynomial parameters
         bg_poly_coefs = [p[n] for n in p if 'bg_poly' in n]
         shift_coefs = [p[n] for n in p if 'shift' in n]
-
-        # See if offset is in the parameters
-        if 'offset' in p.keys():
-            offset = p['offset'] * np.max(self.spec) / 100
-        else:
-            offset = 0
+        offset_coefs = [p[n] for n in p if 'offset' in n]
 
         # Construct background polynomial
         bg_poly = np.polyval(np.flip(bg_poly_coefs), self.model_grid)
@@ -221,6 +340,10 @@ class Analyser(object):
         # Multiply by the background
         raw_spec = np.multiply(bg_poly, total_trans)
 
+        # Add the offset
+        offset = np.polyval(np.flip(offset_coefs), self.model_grid)
+        raw_spec = np.add(raw_spec, offset)
+
         # Generate the ILS is any ILS parameters are being fit
         if self.params['opd'].vary or self.params['fov'].vary:
             self._make_ils(abs(p['opd']), abs(p['fov']))
@@ -236,16 +359,13 @@ class Analyser(object):
         # Interpolate onto the measurement grid
         interp_spec = griddata(shift_model_grid, spec, x)
 
-        # Add the offset
-        interp_offset_spec = np.add(interp_spec, offset)
-
         # Progress the iteration counter
         self.iter_count += 1
 
-        return interp_offset_spec
+        return interp_spec
 
     def _make_ils(self, optical_path_diff, fov, apod_function='NB_medium'):
-        """."""
+        """Generate the ILS to use in the fit."""
         # Define the total optical path difference as the sampling frequency
         total_opd = self.npts_per_cm
 
@@ -329,7 +449,7 @@ class Analyser(object):
         return norm_kernel
 
     def _zero_fill(self, spectrum, zero_fill_factor):
-        """."""
+        """Zero-fill the provided spectrum to increase the sampling."""
         # Unpack the x and  data from the spectrum
         grid = spectrum.coords['Wavenumber'].to_numpy()
         spec = spectrum.to_numpy()
@@ -385,11 +505,52 @@ class Analyser(object):
 
 
 class FitResult(object):
-    """."""
+    """Contains the results of a fit by the Analyser.
+
+    Parameters
+    ----------
+    analyser : Analyser
+        The analyser used to fit the spectrum
+    spectrum : xarray.DataArray
+        The spectrum fitted by the Analyser
+    popt : numpy array
+        The optimised parameters
+    perr : numpy array
+        The error on the optimised parameters
+    nerr : int
+        The error flag. 0 = no error, 1 = fit failed.
+    iter_count : int
+        The number of iterations taken to converge.
+    residual_limit : float
+        The maximum fit residual to allow a "good" fit
+    calc_od : str or list
+        The gas parameters for which to calculate the optical depths. If all,
+        then all gases are calculated.
+
+    Methods
+    -------
+    None
+
+    Attributes
+    ----------
+    params : Parameters
+        The Parameters used in the fit, with the fit_val and fit_err values
+        populated
+    grid : numpy array
+        The measurement grid in the fit window
+    spec : numpy array
+        The measurement spectrum in the fit window
+    meas_od : dict
+        Contains, for each gas, the optical depth difference between the
+        measured spectrum and the fitted spectrum without the contribution from
+        that gas. Useful for determining fit quality
+    fit_od : dict
+        Contains, for each gas, the fitted optical depth spectrum.
+    """
 
     def __init__(self, analyser, spectrum, popt, perr, nerr, iter_count,
                  residual_limit, calc_od):
-        """."""
+        """Initialise the FItResult."""
 
         self.analyser = analyser
         self.params = analyser.params
@@ -447,7 +608,7 @@ class FitResult(object):
                            if par.species is not None]
             for par in calc_od:
                 if par in self.params:
-                    self.calc_od(par)
+                    self._calc_od(par)
 
         # If not then return nans
         else:
@@ -462,18 +623,16 @@ class FitResult(object):
                     self.meas_od[par] = np.full(len(self.spec), np.nan)
                     self.fit_od[par] = np.full(len(self.spec), np.nan)
 
-    def calc_od(self, par_name):
-        """."""
+    def _calc_od(self, par_name):
+        """Calculate the given gas optical depth spectrum."""
         # Make a copy of the parameters to use in the OD calculation
         params = self.params.make_copy()
 
         # Set the parameter and any offset coefficients to zero
         params[par_name].fit_val = 0
-        if 'offset' in params.keys():
-            offset = params['offset'].fit_val
-            # params['offset'].fit_val = 0
-        else:
-            offset = 0
+        for par in params:
+            if 'offset' in par:
+                params[par].fit_val = 0
 
         # Calculate the fit without the parameter
         fit_params = params.popt_list()
@@ -485,6 +644,14 @@ class FitResult(object):
         zero_grid = self.analyser.model_grid - min(self.analyser.model_grid)
         wl_shift = np.polyval(np.flip(shift_coefs), zero_grid)
         shift_model_grid = np.add(self.analyser.model_grid, wl_shift)
+
+        # Calculate the intensity offset
+        offset_coefs = [p[n] for n in p if 'offset' in n]
+        offset = np.polyval(offset_coefs, self.analyser.model_grid)
+        offset = griddata(shift_model_grid,
+                          offset,
+                          self.grid,
+                          method='cubic')
 
         # Calculate the parameter od
         par_od = np.multiply(params[par_name].xsec_od, p[par_name])
