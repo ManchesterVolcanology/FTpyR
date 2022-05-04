@@ -8,8 +8,10 @@ import warnings
 import traceback
 import qdarktheme
 import numpy as np
-import pyqtgraph as pg
+import pandas as pd
+from scipy import odr
 from functools import partial
+from scipy.optimize import curve_fit
 from PySide6.QtGui import QIcon, QAction
 from PySide6.QtCore import Qt, QObject, Signal, Slot, QThreadPool, QRunnable
 from PySide6.QtWidgets import (QMainWindow, QScrollArea, QGridLayout,
@@ -19,6 +21,8 @@ from PySide6.QtWidgets import (QMainWindow, QScrollArea, QGridLayout,
                                QPlainTextEdit, QPushButton, QFileDialog,
                                QWidget, QTabWidget, QDialog, QTableWidget,
                                QTableWidgetItem, QMenu, QHeaderView)
+import pyqtgraph as pg
+import pyqtgraph.dockarea as da
 
 from ftpyr.read import read_spectrum
 from ftpyr.analyse import Analyser
@@ -196,12 +200,13 @@ class MainWindow(QMainWindow):
         self.inputTabs = {}
         self.outputTabs = {}
         self.windowWidgets = {}
-        self.graphwins = {}
         self.windows = []
         self.plot_axes = {}
         self.plot_lines = {}
         self.plot_regions = {}
         self.results_tables = {}
+        self.fit_results = {}
+        self.species_list = {}
 
         # Read in gas list
         with open('databases/atm_layer.yml', 'r') as ymlfile:
@@ -283,35 +288,54 @@ class MainWindow(QMainWindow):
         )
         file_layout.addWidget(btn, 1, 4)
 
+        # # Add an input for the background spectrum
+        # file_layout.addWidget(QLabel('Background\nSpectrum:'), 2, 0)
+        # self.widgets['bg_fname'] = QLineEdit()
+        # file_layout.addWidget(self.widgets['bg_fname'], 2, 1, 1, 3)
+        # btn = QPushButton('Browse')
+        # btn.setFixedSize(70, 25)
+        # btn.clicked.connect(
+        #     partial(self.browse, self.widgets['bg_fname'], 'single', None)
+        # )
+        # file_layout.addWidget(btn, 2, 4)
+        #
+        # # Add control for background correction
+        # file_layout.addWidget(QLabel('Background\nBehaviour:'), 3, 0)
+        # self.widgets['bg_behaviour'] = QComboBox()
+        # self.widgets['bg_behaviour'].addItems(
+        #     ['ignore', 'subtract', 'divide'])
+        # self.widgets['bg_behaviour'].setFixedSize(100, 20)
+        # file_layout.addWidget(self.widgets['bg_behaviour'], 3, 1)
+
         # Add an input for the RFM exe path
-        file_layout.addWidget(QLabel('RFM:'), 2, 0)
+        file_layout.addWidget(QLabel('RFM:'), 4, 0)
         self.widgets['rfm_path'] = QLineEdit()
         self.widgets['rfm_path'].setToolTip('RFM executable file')
-        file_layout.addWidget(self.widgets['rfm_path'], 2, 1, 1, 3)
+        file_layout.addWidget(self.widgets['rfm_path'], 4, 1, 1, 3)
         btn = QPushButton('Browse')
         btn.setFixedSize(70, 25)
         btn.clicked.connect(
             partial(self.browse, self.widgets['rfm_path'], 'single', None)
         )
-        file_layout.addWidget(btn, 2, 4)
+        file_layout.addWidget(btn, 4, 4)
 
         # Add an input for the HITRAN database path
-        file_layout.addWidget(QLabel('HITRAN:'), 3, 0)
+        file_layout.addWidget(QLabel('HITRAN:'), 5, 0)
         self.widgets['hitran_path'] = QLineEdit()
         self.widgets['hitran_path'].setToolTip('HITRAN database file')
-        file_layout.addWidget(self.widgets['hitran_path'], 3, 1, 1, 3)
+        file_layout.addWidget(self.widgets['hitran_path'], 5, 1, 1, 3)
         btn = QPushButton('Browse')
         btn.setFixedSize(70, 25)
         btn.clicked.connect(
             partial(self.browse, self.widgets['hitran_path'], 'single', None)
         )
-        file_layout.addWidget(btn, 3, 4)
+        file_layout.addWidget(btn, 5, 4)
 
         # Spectrometer setup ==================================================
 
         # Add tab
         specTab = QWidget()
-        globalTabs.addTab(specTab, 'Spectrometer')
+        globalTabs.addTab(specTab, 'Model')
 
         # Add layout
         spec_layout = QGridLayout(specTab)
@@ -344,6 +368,9 @@ class MainWindow(QMainWindow):
             QRightLabel('Optical Path\nDifference (cm)'), 1, 2)
         self.widgets['opd'] = DSpinBox(1.6, [0, 100], 0.01)
         spec_layout.addWidget(self.widgets['opd'], 1, 3)
+
+        # New row
+        spec_layout.addWidget(QHLine(), 2, 0, 1, 10)
 
     def _createLogs(self):
         """Generate program log widgets."""
@@ -386,7 +413,7 @@ class MainWindow(QMainWindow):
         logger.addHandler(self.handler)
         logger.setLevel(logging.INFO)
         layout.addWidget(self.logBox, 2, 0, 1, 5)
-        logger.info(f'Welcome to FTpyR v{__version__}! Written by Ben Esse')
+        logger.info(f'Welcome to FTpyR v{__version__}!')
 
     def _createOutputs(self):
         """Generate output and display widgets."""
@@ -399,21 +426,19 @@ class MainWindow(QMainWindow):
 
         # Setup the initial results graph view ================================
 
-        graphtab = QWidget()
-        self.outputTabHolder.addTab(graphtab, "Overview")
-        glayout = QGridLayout(graphtab)
-        self.graphwins['main'] = pg.GraphicsLayoutWidget(show=True)
-        pg.setConfigOptions(antialias=True)
-        glayout.addWidget(self.graphwins['main'], 0, 0)
+        graphTab = QWidget()
+        self.outputTabHolder.addTab(graphTab, "Overview")
+        layout = QGridLayout(graphTab)
+        spec_area = da.DockArea()
+        layout.addWidget(spec_area, 0, 0)
 
-        # Make the graphs =====================================================
+        # Generate the docks
+        spec_dock = da.Dock('Spectrum')
+        spec_area.addDock(spec_dock, 'top')
 
         # Generate axes
-        ax0 = self.graphwins['main'].addPlot(  # Full spectrum
-            row=0, col=0, colspan=2
-        )
-        ax1 = self.graphwins['main'].addPlot(row=1, col=0)  # Ratio plot 1
-        ax2 = self.graphwins['main'].addPlot(row=1, col=1)  # Ratio plot 2
+        ax0 = pg.PlotWidget()
+        spec_dock.addWidget(ax0)
 
         # Generate plot lines
         pen0 = pg.mkPen(color=self.PLOTCOLORS[0], width=0.8)
@@ -423,18 +448,73 @@ class MainWindow(QMainWindow):
         ax0.setLabel('left', 'Intensity (counts)')
         ax0.setLabel('bottom', 'Wavenumber (cm-1)')
 
-        self.widgets['ratio1x'] = QComboBox()
-        self.widgets['ratio1y'] = QComboBox()
-        self.widgets['ratio2x'] = QComboBox()
-        self.widgets['ratio2y'] = QComboBox()
+        # Ratio graph =========================================================
 
-        for ax in [ax0, ax1, ax2]:
-            ax.setDownsampling(mode='peak')
-            ax.setClipToView(True)
+        ratioTab = QWidget()
+        self.outputTabHolder.addTab(ratioTab, "Ratios")
+        layout = QGridLayout(ratioTab)
+        layout.setAlignment(Qt.AlignTop)
+
+        # Generate menus to select ratio species
+        layout.addWidget(QRightLabel('x-Window'), 0, 0)
+        self.widgets['ratio_WindowX'] = QComboBox()
+        self.widgets['ratio_WindowX'].currentTextChanged.connect(
+            lambda: self.update_ratio_combo('x')
+        )
+        layout.addWidget(self.widgets['ratio_WindowX'], 0, 1)
+        layout.addWidget(QRightLabel('x-Species'), 1, 0)
+        self.widgets['ratioSpeciesX'] = QComboBox()
+        layout.addWidget(self.widgets['ratioSpeciesX'], 1, 1)
+        self.widgets['ratioSpeciesX'].currentTextChanged.connect(
+            self.update_ratio_plot
+        )
+        layout.addWidget(QRightLabel('y-Window'), 0, 2)
+        self.widgets['ratio_WindowY'] = QComboBox()
+        self.widgets['ratio_WindowY'].currentTextChanged.connect(
+            lambda: self.update_ratio_combo('y')
+        )
+        layout.addWidget(self.widgets['ratio_WindowY'], 0, 3)
+        layout.addWidget(QRightLabel('y-Species'), 1, 2)
+        self.widgets['ratioSpeciesY'] = QComboBox()
+        layout.addWidget(self.widgets['ratioSpeciesY'], 1, 3)
+        self.widgets['ratioSpeciesY'].currentTextChanged.connect(
+            self.update_ratio_plot
+        )
+
+        # Add displays for the fitted gradient and intercept
+        layout.addWidget(QRightLabel('Gradient:'), 0, 4)
+        self.ratio_gradient = QLabel('-')
+        layout.addWidget(self.ratio_gradient, 0, 5)
+        layout.addWidget(QRightLabel('Intercept:'), 1, 4)
+        self.ratio_intercept = QLabel('-')
+        layout.addWidget(self.ratio_intercept, 1, 5)
+
+        # Add option to include errors in fit
+        self.widgets['ratio_fit_errors'] = QCheckBox('Include\nErrors?')
+        layout.addWidget(self.widgets['ratio_fit_errors'], 0, 6)
+        self.widgets['ratio_fit_errors'].stateChanged.connect(
+            self.update_ratio_plot)
+
+        # Generate the plot
+        ratio_area = da.DockArea()
+        layout.addWidget(ratio_area, 2, 0, 1, 7)
+
+        # Generate the docks
+        ratio_dock = da.Dock('Ratio')
+        ratio_area.addDock(ratio_dock, 'top')
+
+        # Generate axes
+        ax1 = pg.PlotWidget()
+        ratio_dock.addWidget(ax1)
+
+        # Generate plot lines
+        l1 = pg.ErrorBarItem()
+        l2 = ax1.plot(pen=pg.mkPen(color=self.PLOTCOLORS[1], width=1.0))
+        ax1.addItem(l1)
 
         # Store graph objects
-        self.plot_axes['main'] = [ax0, ax1, ax2]
-        self.plot_lines['main'] = [l0]
+        self.plot_axes['main'] = [ax0, ax1]
+        self.plot_lines['main'] = [l0, l1, l2]
 
     # =========================================================================
     # Add fit window
@@ -456,7 +536,7 @@ class MainWindow(QMainWindow):
             return
 
         # Generate the new tabs
-        self.inputTabs[name] = QTabWidget()
+        self.inputTabs[name] = QWidget()
         self.inputTabHolder.addTab(self.inputTabs[name], name)
         self.outputTabs[name] = QTabWidget()
         self.outputTabHolder.addTab(self.outputTabs[name], name)
@@ -466,17 +546,8 @@ class MainWindow(QMainWindow):
 
         # Inputs tab ==========================================================
 
-        setupTab = QScrollArea()
-        gasTab = QScrollArea()
-        shiftTab = QScrollArea()
-        bgpolyTab = QScrollArea()
-        self.inputTabs[name].addTab(setupTab, 'Setup')
-        self.inputTabs[name].addTab(gasTab, 'Gases')
-        self.inputTabs[name].addTab(shiftTab, 'Shift')
-        self.inputTabs[name].addTab(bgpolyTab, 'Background')
-
-        # Setup layout
-        layout = QGridLayout(setupTab)
+        # Generate the layout
+        layout = QGridLayout(self.inputTabs[name])
         layout.setAlignment(Qt.AlignTop)
 
         # Create inputs for the fit window
@@ -487,29 +558,39 @@ class MainWindow(QMainWindow):
         winWidgets['wn_stop'] = SpinBox(0, [0, 1e5])
         layout.addWidget(winWidgets['wn_stop'], 1, 1)
 
-        # Input for Offset
-        layout.addWidget(QRightLabel('Zero Offset (%)'), 2, 0)
-        winWidgets['offset'] = DSpinBox(0, [0, 100], 1)
-        layout.addWidget(winWidgets['offset'], 2, 1)
-        winWidgets['fit_offset'] = QCheckBox('Fit?')
-        winWidgets['fit_offset'].setChecked(True)
-        layout.addWidget(winWidgets['fit_offset'], 2, 2)
+        # Create a checkbox to disable/enable the window
+        winWidgets['run_window'] = QCheckBox('Run\nWindow?')
+        winWidgets['run_window'].setChecked(True)
+        layout.addWidget(winWidgets['run_window'], 0, 4)
+        layout.addWidget(winWidgets['run_window'], 0, 2)
+
+        # Create a button to remove the window
+        btn = QPushButton('Remove')
+        btn.clicked.connect(lambda: self.remFitWindow(name))
+        layout.addWidget(btn, 1, 2)
+
+        paramTabHolder = QTabWidget()
+        layout.addWidget(paramTabHolder, 2, 0, 1, 4)
+        gasTab = QScrollArea()
+        shiftTab = QScrollArea()
+        bgpolyTab = QScrollArea()
+        offsetTab = QScrollArea()
+        paramTabHolder.addTab(gasTab, 'Gases')
+        paramTabHolder.addTab(shiftTab, 'Shift')
+        paramTabHolder.addTab(bgpolyTab, 'Background')
+        paramTabHolder.addTab(offsetTab, 'Offset')
 
         # Add parameter tables
         winWidgets['gasTable'] = paramTable(gasTab, 'param', 420, 200,
                                             self.gas_list.keys())
-        winWidgets['shiftTable'] = paramTable(shiftTab, 'poly')
-        winWidgets['bgpolyTable'] = paramTable(bgpolyTab, 'poly')
+        winWidgets['shiftTable'] = paramTable(shiftTab, 'poly', 300, 200)
+        winWidgets['bgpolyTable'] = paramTable(bgpolyTab, 'poly', 300, 200)
+        winWidgets['offsetTable'] = paramTable(offsetTab, 'poly', 300, 200)
 
         # Link the parameter table to the plot parameter combobox
         winWidgets['gasTable'].cellChanged.connect(
             lambda: self.update_plot_species(name)
         )
-
-        # Create a button to remove the window
-        btn = QPushButton('Remove')
-        btn.clicked.connect(lambda: self.remFitWindow(name))
-        layout.addWidget(btn, 0, 2)
 
         # Outputs tab =========================================================
 
@@ -532,13 +613,38 @@ class MainWindow(QMainWindow):
         layout.addWidget(winWidgets['target_species'], 0, 1)
 
         # Generate the graph window
-        graphwin = pg.GraphicsLayoutWidget(show=True)
-        layout.addWidget(graphwin, 1, 0, 1, 5)
+        area = da.DockArea()
+        layout.addWidget(area, 1, 0, 1, 5)
+        layout.addWidget(QLabel('Wavenumber (cm-1)'), 2, 2)
+
+        # Generate the docks
+        d0 = da.Dock('')
+        d1 = da.Dock('')
+        d2 = da.Dock('')
+        area.addDock(d0, 'bottom')
+        area.addDock(d1, 'bottom')
+        area.addDock(d2, 'bottom')
+
+        # Hide the titlebars
+        for d in [d0, d1, d2]:
+            d.hideTitleBar()
 
         # Generate the plot axes
-        ax0 = graphwin.addPlot(row=0, col=0)
-        ax1 = graphwin.addPlot(row=1, col=0)
-        ax2 = graphwin.addPlot(row=2, col=0)
+        ax0 = pg.PlotWidget()
+        ax1 = pg.PlotWidget()
+        ax2 = pg.PlotWidget()
+        ax1.setXLink(ax0)
+        ax2.setXLink(ax0)
+
+        # Add plot labels
+        ax0.setLabel('left', 'Intensity (counts)')
+        ax1.setLabel('left', 'Residual (%)')
+        ax2.setLabel('left', 'Optical Depth')
+
+        # Add to docks
+        d0.addWidget(ax0)
+        d1.addWidget(ax1)
+        d2.addWidget(ax2)
 
         # Greate the plot lines
         pen0 = pg.mkPen(color=self.PLOTCOLORS[0], width=1.0)
@@ -549,14 +655,13 @@ class MainWindow(QMainWindow):
         l3 = ax2.plot(pen=pen0)  # Measured OD
         l4 = ax2.plot(pen=pen1)  # Fitted OD
 
+        # Add legend to first axis
+        legend = ax0.addLegend()
+        legend.addItem(l0, 'Spectrum')
+        legend.addItem(l1, 'Fit')
+
         self.plot_axes[name] = [ax0, ax1, ax2]
         self.plot_lines[name] = [l0, l1, l2, l3, l4]
-
-        # Add axes labels
-        ax0.setLabel('left', 'Intensity (counts)')
-        ax1.setLabel('left', 'Residual (%)')
-        ax2.setLabel('left', 'Optical Depth')
-        ax2.setLabel('bottom', 'Wavenumber (cm-1)')
 
         # Add fit regions to main plot and connect to the wavenumber bounds
         self.plot_regions[name] = pg.LinearRegionItem([0, 0])
@@ -589,10 +694,27 @@ class MainWindow(QMainWindow):
         # Add to overall widgets ==============================================
 
         self.windowWidgets[name] = winWidgets
-        self.graphwins[name] = graphwin
         self.results_tables[name] = resTable
 
         self.windows.append(name)
+
+        # Update ratio boxes ==================================================
+
+        # Get the current state
+        xwin = self.widgets.get('ratio_WindowX')
+        ywin = self.widgets.get('ratio_WindowY')
+
+        # Clear the box
+        self.widgets['ratio_WindowX'].clear()
+        self.widgets['ratio_WindowY'].clear()
+
+        # Update the list
+        self.widgets['ratio_WindowX'].addItems(self.windows)
+        self.widgets['ratio_WindowY'].addItems(self.windows)
+
+        # Reset to origional state
+        self.widgets.set('ratio_WindowX', xwin)
+        self.widgets.set('ratio_WindowY', ywin)
 
         logger.info(f'{name} window added')
 
@@ -603,7 +725,7 @@ class MainWindow(QMainWindow):
 
         # Remove the window tab from the GUI
         self.inputTabHolder.removeTab(window_idx)
-        self.outputTabHolder.removeTab(window_idx)
+        self.outputTabHolder.removeTab(window_idx + 1)
 
         # Delete the actual widget from memory
         self.inputTabs[name].setParent(None)
@@ -617,19 +739,62 @@ class MainWindow(QMainWindow):
         self.inputTabs.pop(name)
         self.outputTabs.pop(name)
         self.windowWidgets.pop(name)
-        self.graphwins.pop(name)
         self.plot_lines.pop(name)
         self.plot_axes.pop(name)
         self.plot_regions.pop(name)
+
+        # Update ratio boxes ==================================================
+
+        # Get the current state
+        xwin = self.widgets.get('ratio_WindowX')
+        ywin = self.widgets.get('ratio_WindowY')
+
+        # Clear the box
+        self.widgets['ratio_WindowX'].clear()
+        self.widgets['ratio_WindowY'].clear()
+
+        # Update the list
+        self.widgets['ratio_WindowX'].addItems(self.windows)
+        self.widgets['ratio_WindowY'].addItems(self.windows)
+
+        # Reset to origional state
+        self.widgets.set('ratio_WindowX', xwin)
+        self.widgets.set('ratio_WindowY', ywin)
 
         logger.info(f'{name} window removed')
 
     def update_plot_species(self, name):
         """Update the plot parameter options."""
         rows = self.windowWidgets[name]['gasTable'].getData()
-        params = [r[0] for r in rows]
+        species_list = [r[0] for r in rows]
+        current_species = self.windowWidgets[name].get('target_species')
         self.windowWidgets[name]['target_species'].clear()
-        self.windowWidgets[name]['target_species'].addItems(params)
+        self.windowWidgets[name]['target_species'].addItems(species_list)
+        self.windowWidgets[name].set('target_species', current_species)
+        self.species_list[name] = species_list
+
+    def update_ratio_combo(self, axis):
+        """Update ratio selection comboboxes."""
+        try:
+            if axis == 'x':
+                name = self.widgets.get('ratio_WindowX')
+                if name != '':
+                    orig_state_x = self.widgets.get('ratioSpeciesX')
+                    self.widgets['ratioSpeciesX'].clear()
+                    self.widgets['ratioSpeciesX'].addItems(
+                        self.species_list[name])
+                    self.widgets.set('ratioSpeciesX', orig_state_x)
+
+            elif axis == 'y':
+                name = self.widgets.get('ratio_WindowY')
+                if name != '':
+                    orig_state_x = self.widgets.get('ratioSpeciesY')
+                    self.widgets['ratioSpeciesY'].clear()
+                    self.widgets['ratioSpeciesY'].addItems(
+                        self.species_list[name])
+                    self.widgets.set('ratioSpeciesY', orig_state_x)
+        except KeyError:
+            pass
 
     # =========================================================================
     # Analysis loop and slots
@@ -640,89 +805,115 @@ class MainWindow(QMainWindow):
         # Pull the widget data
         widgetData = self.getWidgetData()
         self.workers = {}
-        self.ready_flag = {}
+        self.ready_flags = {}
 
         # Get the spectra to analyse
         self.spectra_list = widgetData['spec_fnames'].split('\n')
         self.spectrum_counter = 0
 
-        self.update_status('Analysing')
+        # Create worker list
+        workers = []
 
-        # Generate the thread workers
-        for name in self.windows:
+        self.update_status('Initialising')
 
-            windowData = widgetData['fitWindows'][name]
+        # Open main output file
+        self.outfname = f"{widgetData['save_dir']}/all_gas_output.csv"
+        with open(self.outfname, 'w') as outfile:
 
-            # Setup the parameters
-            params = Parameters()
+            outfile.write('Filename,Timestamp')
 
-            # Add gas parameters
-            for line in windowData['gasTable']:
+            # Generate the thread workers
+            for name in self.windows:
+
+                windowData = widgetData['fitWindows'][name]
+
+                if not windowData['run_window']:
+                    continue
+
+                # Setup the parameters
+                params = Parameters()
+
+                # Add gas parameters
+                for line in windowData['gasTable']:
+                    params.add(
+                        name=line[0],
+                        vary=line[1],
+                        species=line[2],
+                        temp=line[3],
+                        pres=line[4],
+                        path=line[5]
+                    )
+
+                    # Add outfile header
+                    outfile.write(
+                        f',{line[0]} ({name}),{line[0]}_err ({name})'
+                    )
+
+                outfile.write(f',FitQuality ({name})')
+
+                # Add background parameters
+                for i, line in enumerate(windowData['bgpolyTable']):
+                    params.add(name=f'bg_poly{i}', value=line[0], vary=line[1])
+
+                # Add shift parameters
+                for i, line in enumerate(windowData['shiftTable']):
+                    params.add(name=f'shift{i}', value=line[0], vary=line[1])
+
+                # Add offset parameters
+                for i, line in enumerate(windowData['offsetTable']):
+                    params.add(name=f'offset{i}', value=line[0], vary=line[1])
+
+                # Add ILS parameters
                 params.add(
-                    name=line[0],
-                    vary=line[1],
-                    species=line[2],
-                    temp=line[3],
-                    pres=line[4],
-                    path=line[5]
+                    name='fov',
+                    value=widgetData['fov'],
+                    vary=widgetData['fit_fov']
+                )
+                params.add(
+                    name='opd',
+                    value=widgetData['opd'],
+                    vary=False
                 )
 
-            # Add background parameters
-            for i, line in enumerate(windowData['bgpolyTable']):
-                params.add(name=f'bg_poly{i}', value=line[0], vary=line[1])
+                # Generate the analyser function
+                logger.info(f'Generating analyser for {name} window')
+                analyser = Analyser(
+                    params=params,
+                    rfm_path=widgetData['rfm_path'],
+                    hitran_path=widgetData['hitran_path'],
+                    wn_start=windowData['wn_start'],
+                    wn_stop=windowData['wn_stop'],
+                    zero_fill_factor=widgetData['zero_fill_factor'],
+                    solar_flag=False,
+                    obs_height=0.0,
+                    update_params=True,
+                    residual_limit=50,
+                    npts_per_cm=50,
+                    apod_function=widgetData['apod_function'],
+                    outfile=f"{widgetData['save_dir']}/{name}_output.csv"
+                )
 
-            # Add shift parameters
-            for i, line in enumerate(windowData['shiftTable']):
-                params.add(name=f'shift{i}', value=line[0], vary=line[1])
+                # Initialise the results table
+                self.initialize_results_table(name, analyser.params)
 
-            # Zero offset parameters
-            params.add(
-                name='offset',
-                value=windowData['offset'],
-                vary=windowData['fit_offset']
-            )
+                # raise Exception
+                worker = Worker(name, analyser)
+                worker.signals.results.connect(self.get_results)
+                worker.signals.error.connect(self.update_error)
+                self.workers[name] = worker
+                self.ready_flags[name] = False
+                workers.append(worker)
 
-            # Add ILS parameters
-            params.add(
-                name='fov',
-                value=widgetData['fov'],
-                vary=widgetData['fit_fov']
-            )
-            params.add(
-                name='opd',
-                value=widgetData['opd'],
-                vary=False
-            )
+            outfile.write('\n')
 
-            # Generate the analyser function
-            logger.info(f'Generating analyser for {name} window')
-            analyser = Analyser(
-                params=params,
-                rfm_path=widgetData['rfm_path'],
-                hitran_path=widgetData['hitran_path'],
-                wn_start=windowData['wn_start'],
-                wn_stop=windowData['wn_stop'],
-                zero_fill_factor=widgetData['zero_fill_factor'],
-                solar_flag=False,
-                obs_height=0.0,
-                update_params=True,
-                residual_limit=50,
-                npts_per_cm=50,
-                apod_function=widgetData['apod_function'],
-                outfile=f"{widgetData['save_dir']}/{name}_output.csv"
-            )
-
-            # Initialise the results table
-            self.initialize_results_table(name, analyser.params)
-
-            # raise Exception
-            worker = Worker(name, analyser)
-            worker.signals.results.connect(self.get_results)
-            worker.signals.error.connect(self.update_error)
-            worker.signals.finished.connect(self.analysis_complete)
-            self.workers[name] = worker
-            self.ready_flag[name] = False
+        # Begin the workers
+        for worker in workers:
             self.threadpool.start(worker)
+
+        self.update_status('Analysing')
+
+        # Send the first spectrum
+        self.set_next_spectrum()
 
         # Disable the start button and enable the pause/stop buttons
         self.start_btn.setEnabled(False)
@@ -733,7 +924,7 @@ class MainWindow(QMainWindow):
         """Send spectrum to workers to analyse."""
         for name, worker in self.workers.items():
             worker.setSpectrum(spectrum)
-            self.ready_flag[name] = False
+            self.ready_flags[name] = False
 
     def stop_analysis(self):
         """Stop analysis."""
@@ -759,6 +950,9 @@ class MainWindow(QMainWindow):
         # Unpack the results
         name, fit = results
 
+        # Add to the dictionary
+        self.fit_results[name] = fit
+
         if fit is not None:
             # Get the plot parameter
             plot_gas = self.windowWidgets[name].get('target_species')
@@ -780,11 +974,30 @@ class MainWindow(QMainWindow):
                 )
 
         # Update worker ready flag
-        self.ready_flag[name] = True
+        self.ready_flags[name] = True
 
         # Check if all workers are ready
-        ready_flags = np.array([b for b in self.ready_flag.values()])
+        ready_flags = np.array([b for b in self.ready_flags.values()])
         if ready_flags.all():
+
+            # Write the results
+            with open(self.outfname, 'a') as outfile:
+
+                # Write the filename and timestamp
+                ts = self.spectrum.attrs['timestamp']
+                outfile.write(f'{self.spec_filename},{ts}')
+
+                # Write the gas parameter results
+                for name in self.ready_flags.keys():
+                    fit = self.fit_results[name]
+
+                    for par in fit.params.values():
+                        if par.species is not None:
+                            outfile.write(f',{par.fit_val},{par.fit_err}')
+
+                    # Write the fit quality result
+                    outfile.write(f',{fit.nerr}')
+                outfile.write('\n')
 
             # If so, check if all spectra have been analysed
             if self.spectrum_counter == len(self.spectra_list):
@@ -792,11 +1005,19 @@ class MainWindow(QMainWindow):
 
             # If not, analyse the next spectrum
             else:
-                self.spec_filename = self.spectra_list[self.spectrum_counter]
-                self.spectrum = read_spectrum(self.spec_filename)
-                self.send_spectrum(self.spectrum)
-                self.spectrum_counter += 1
-                self.update_main_plots()
+                self.set_next_spectrum()
+
+    def set_next_spectrum(self):
+        """Set next spectrum to analyse."""
+        self.spec_filename = self.spectra_list[self.spectrum_counter]
+        self.spectrum = read_spectrum(self.spec_filename)
+        self.progress.setValue(
+            (self.spectrum_counter+1) / len(self.spectra_list) * 100
+        )
+        self.send_spectrum(self.spectrum)
+        self.spectrum_counter += 1
+        self.update_main_plots()
+        self.update_ratio_plot()
 
     def analysis_complete(self):
         """Signal for end of analysis."""
@@ -817,8 +1038,88 @@ class MainWindow(QMainWindow):
         # Get the spectrum x and y data
         x = self.spectrum.coords['Wavenumber'].to_numpy()
         y = self.spectrum.to_numpy()
-
         self.plot_lines['main'][0].setData(x, y)
+
+    def update_ratio_plot(self):
+        """Update the data shown on the ratio plot."""
+        # Read in the time series results for the ratio plots
+        try:
+            df = pd.read_csv(self.outfname, parse_dates=['Timestamp'])
+        except AttributeError:
+            return
+        xwin = self.widgets.get('ratio_WindowX')
+        xgas = self.widgets.get('ratioSpeciesX')
+        ywin = self.widgets.get('ratio_WindowY')
+        ygas = self.widgets.get('ratioSpeciesY')
+
+        try:
+            # Unpack good fit values and errors
+            idx = np.logical_and(
+                df[f'FitQuality ({xwin})'] == 0,
+                df[f'FitQuality ({ywin})'] == 0
+            )
+            df = df[idx]
+            xval = df[f'{xgas} ({xwin})'].to_numpy()
+            xerr = df[f'{xgas}_err ({xwin})'].to_numpy()
+            yval = df[f'{ygas} ({ywin})'].to_numpy()
+            yerr = df[f'{ygas}_err ({ywin})'].to_numpy()
+
+            # Update plot
+            self.plot_lines['main'][1].setData(
+                x=xval, y=yval, height=yerr, width=xerr, beam=2,
+                pen=pg.mkPen(color=self.PLOTCOLORS[0], width=0.0))
+
+            # Fit linear regression if there is more than 1 point
+            if len(xval) > 1:
+                xfit = np.array([xval.min(), xval.max()])
+
+                # Run initial polyfit to get first guess of parameters
+                [m, c] = np.polyfit(xval, yval, 1)
+
+                # Fit without taking errors into account
+                if not self.widgets.get('ratio_fit_errors'):
+                    popt, pcov = curve_fit(
+                        lin_fit,
+                        xval,
+                        yval,
+                        [m, c]
+                    )
+                    perr = np.sqrt(np.diag(pcov))
+
+                # Fit with taking errors into account
+                else:
+                    data = odr.Data(
+                        x=xval,
+                        y=yval,
+                        wd=np.power(xerr, -1),
+                        we=np.power(yerr, -1)
+                    )
+
+                    myodr = odr.ODR(
+                        data,
+                        odr.unilinear,
+                        beta0=[m, c])
+                    out = myodr.run()
+                    popt = out.beta
+                    perr = out.sd_beta
+
+                # Make the best fit line
+                yfit = lin_fit(xfit, *popt)
+
+                # pdate the plots
+                self.plot_lines['main'][2].setData(xfit, yfit)
+                self.ratio_gradient.setText(
+                    f'{popt[0]:.2E}\n(+/- {perr[0]:.2E})')
+                self.ratio_intercept.setText(
+                    f'{popt[1]:.2E}\n(+/- {perr[1]:.2E})')
+
+            # Otherwise clear the graphs
+            else:
+                self.plot_lines['main'][2].setData([], [])
+                self.ratio_gradient.setText('-')
+                self.ratio_intercept.setText('-')
+        except KeyError:
+            pass
 
     def plot_first_spectrum(self):
         """Plot first spectrum in list."""
@@ -844,9 +1145,6 @@ class MainWindow(QMainWindow):
         """Update status bar."""
         self.statusBar().showMessage(status)
 
-    def update_progress(self):
-        """Update the progress bar."""
-
     def initialize_results_table(self, name, params):
         """Initialize table rows."""
         # Clear all current rows
@@ -866,6 +1164,7 @@ class MainWindow(QMainWindow):
 
     @Slot(str, logging.LogRecord)
     def updateLog(self, status, record):
+        """Write log statements to the logBox widget."""
         color = self.LOGCOLORS.get(record.levelno, 'black')
         s = '<pre><font color="%s">%s</font></pre>' % (color, status)
         self.logBox.appendHtml(s)
@@ -917,6 +1216,9 @@ class MainWindow(QMainWindow):
         """Get the widget data into a single dictionary."""
         widgetData = {}
 
+        # Set param table keys
+        tableKeys = ['gasTable', 'shiftTable', 'bgpolyTable', 'offsetTable']
+
         # Save the main gui widgets
         for label in self.widgets:
             widgetData[label] = self.widgets.get(label)
@@ -927,7 +1229,7 @@ class MainWindow(QMainWindow):
             winConfig = {}
 
             for key in self.windowWidgets[name]:
-                if key in ['gasTable', 'shiftTable', 'bgpolyTable']:
+                if key in tableKeys:
                     winConfig[key] = self.windowWidgets[name][key].getData()
                 else:
                     winConfig[key] = self.windowWidgets[name].get(key)
@@ -940,6 +1242,9 @@ class MainWindow(QMainWindow):
         """Save the program configuration."""
         # Pull the main widget data
         config = self.getWidgetData()
+
+        # Set param table keys
+        tableKeys = ['gasTable', 'shiftTable', 'bgpolyTable', 'offsetTable']
 
         # Save the theme
         config['theme'] = self.theme
@@ -954,7 +1259,7 @@ class MainWindow(QMainWindow):
             winConfig = {}
 
             for key in self.windowWidgets[name]:
-                if key in ['gasTable', 'shiftTable', 'bgpolyTable']:
+                if key in tableKeys:
                     winConfig[key] = self.windowWidgets[name][key].getData()
                 else:
                     winConfig[key] = self.windowWidgets[name].get(key)
@@ -993,7 +1298,7 @@ class MainWindow(QMainWindow):
                                                        filter)
 
         # Set param table keys
-        tableKeys = ['gasTable', 'shiftTable', 'bgpolyTable']
+        tableKeys = ['gasTable', 'shiftTable', 'bgpolyTable', 'offsetTable']
 
         # Open the config file
         try:
@@ -1004,29 +1309,29 @@ class MainWindow(QMainWindow):
 
             # Apply each config setting
             for label, value in config.items():
-                # try:
-                # Set the fit windows
-                if label == 'fitWindows':
-                    for name, widgets in value.items():
+                try:
+                    # Set the fit windows
+                    if label == 'fitWindows':
+                        for name, widgets in value.items():
 
-                        # Generate the window tabs
-                        self.addFitWindow(name)
+                            # Generate the window tabs
+                            self.addFitWindow(name)
 
-                        for key, val in widgets.items():
+                            for key, val in widgets.items():
 
-                            # Setup the parameter tables
-                            if key in tableKeys:
-                                self.windowWidgets[name][key].setData(val)
-                            else:
-                                self.windowWidgets[name].set(key, val)
+                                # Setup the parameter tables
+                                if key in tableKeys:
+                                    self.windowWidgets[name][key].setData(val)
+                                else:
+                                    self.windowWidgets[name].set(key, val)
 
-                elif label == 'theme':
-                    self.theme = value
+                    elif label == 'theme':
+                        self.theme = value
 
-                else:
-                    self.widgets.set(label, value)
-                # except Exception:
-                #     logger.warning(f'Failed to load {label} from config file')
+                    else:
+                        self.widgets.set(label, value)
+                except Exception:
+                    logger.warning(f'Failed to load {label} from config file')
 
             # Update the config file settings
             self.config_fname = fname
@@ -1054,13 +1359,10 @@ class MainWindow(QMainWindow):
             plotpen = pg.mkPen('k', width=1)
             self.theme = 'Light'
 
-        # Set graph background color
-        for graphwin in self.graphwins.values():
-            graphwin.setBackground(bg_color)
-
         # Set axes spines color
         for axes in self.plot_axes.values():
             for ax in axes:
+                ax.setBackground(bg_color)
                 ax.getAxis('left').setPen(plotpen)
                 ax.getAxis('right').setPen(plotpen)
                 ax.getAxis('top').setPen(plotpen)
@@ -1110,7 +1412,6 @@ class Worker(QRunnable):
 
     def fn(self, name):
         """Main analysis loop."""
-        self.signals.results.emit([name, None])
         while not self.isStopped:
             if self.spectrum is not None and not self.isPaused:
                 fit = self.analyser.fit(self.spectrum)
@@ -1199,6 +1500,9 @@ class Widgets(dict):
 
     def get(self, key):
         """Get the value of a widget."""
+        if key not in self.keys():
+            logger.warning(f'{key} widget not found!')
+            return
         if type(self[key]) == QTextEdit:
             return self[key].toPlainText()
         elif type(self[key]) == QLineEdit:
@@ -1210,10 +1514,13 @@ class Widgets(dict):
         elif type(self[key]) in [QSpinBox, QDoubleSpinBox, SpinBox, DSpinBox]:
             return self[key].value()
         else:
-            raise ValueError
+            raise ValueError('Widget type not recognised!')
+            return
 
     def set(self, key, value):
         """Set the value of a widget."""
+        if key not in self.keys():
+            logger.warning(f'{key} widget not found!')
         if type(self[key]) in [QTextEdit, QLineEdit]:
             self[key].setText(str(value))
         elif type(self[key]) == QComboBox:
@@ -1225,7 +1532,7 @@ class Widgets(dict):
         elif type(self[key]) in [QSpinBox, QDoubleSpinBox, SpinBox, DSpinBox]:
             self[key].setValue(float(value))
         else:
-            raise ValueError
+            raise ValueError('Widget type not recognised!')
 
 
 # =============================================================================
@@ -1418,18 +1725,46 @@ class SpinBox(QSpinBox):
 
 
 # =============================================================================
+# Divider classes
+# =============================================================================
+
+class QHLine(QFrame):
+    """Horizontal line widget."""
+
+    def __init__(self):
+        """Initialise."""
+        super(QHLine, self).__init__()
+        self.setFrameShape(QFrame.HLine)
+        self.setFrameShadow(QFrame.Sunken)
+
+
+class QVLine(QFrame):
+    """Vertical line widget."""
+
+    def __init__(self):
+        """Initialise."""
+        super(QVLine, self).__init__()
+        self.setFrameShape(QFrame.VLine)
+        self.setFrameShadow(QFrame.Sunken)
+
+
+# =============================================================================
+# Simple linear fit model
+# =============================================================================
+
+def lin_fit(x, m, c):
+    return x * m + c
+
+# =============================================================================
 # =============================================================================
 # Client code
 # =============================================================================
 # =============================================================================
 
-def main():
+
+if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = MainWindow(app)
     window.show()
     sys.exit(app.exec())
-
-
-if __name__ == '__main__':
-    main()
-    main()
+    sys.exit(app.exec())
