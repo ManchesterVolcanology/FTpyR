@@ -128,8 +128,8 @@ class Analyser(object):
         self.bg_spectrum = bg_spectrum
 
         # Apply zero-filling to the background if required
-        if self.zero_fill_factor:
-            self.bg_spectrum = self._zero_fill(
+        if self.zero_fill_factor and bg_spectrum is not None:
+            self.bg_spectrum = zero_fill(
                 self.bg_spectrum, self.zero_fill_factor)
 
         # Calculate the model x-grid
@@ -212,7 +212,7 @@ class Analyser(object):
         """
         # Apply zero-filling
         if self.zero_fill_factor:
-            spectrum = self._zero_fill(spectrum, self.zero_fill_factor)
+            spectrum = zero_fill(spectrum, self.zero_fill_factor)
 
         # If a background spectrum is given, perform the background correction
         if self.bg_spectrum is not None:
@@ -450,60 +450,37 @@ class Analyser(object):
 
         return norm_kernel
 
-    def _zero_fill(self, spectrum, zero_fill_factor):
-        """Zero-fill the provided spectrum to increase the sampling."""
-        # Unpack the x and  data from the spectrum
-        grid = spectrum.coords['Wavenumber'].to_numpy()
-        spec = spectrum.to_numpy()
 
-        # Get npts
-        orig_npts = len(grid)
+def zero_fill(spectrum, zero_fill_factor):
+    """Zero-fill the provided spectrum to increase the sampling."""
+    # Unpack the x and  data from the spectrum
+    grid = spectrum.coords['Wavenumber'].to_numpy()
+    spec = spectrum.to_numpy()
 
-        # calculate fast_npts the first 2^x after npts
-        fast_npts = fft.next_fast_len(len(spec))
+    # Calculate fast_npts, the first 2^x after npts
+    target_npts = fft.next_fast_len(len(spec)) * zero_fill_factor
 
-        # Add on the required number of zeros to the spectrum to get
-        # fast_npts; make it go to zero at the end
-        extra_npts = fast_npts - orig_npts
-        extra = spec[orig_npts-1]*np.arange(extra_npts)/(extra_npts-1)
-        extra = np.flip(extra)
-        spec_extra = np.concatenate([spec, extra])
+    # FFT the spectrum to time domain
+    time_spec = fft.rfft(spec)
 
-        # FFT the spectrum to frequency space
-        fft_spec = fft.fft(spec_extra)
+    # Re-FFT the time spectrum back to frequency space, padding with zeros
+    filled_spec = fft.irfft(time_spec, target_npts)
 
-        # Rearrange it
-        n = int(fast_npts/2)
-        fft_spec = np.concatenate([fft_spec[n:], fft_spec[:n]])
+    # Compute the new grid
+    filled_grid = np.linspace(grid[0], grid[-1], target_npts)
 
-        # Multiply fast_npts by zero_fill_factor to obtain required zero-filled
-        # array
-        req_npts = fast_npts * zero_fill_factor
-        added_npts = req_npts - fast_npts
-        added_npts_left = int(added_npts/2)
-        added_npts_right = added_npts - added_npts_left
-        extra_left = np.linspace(0, fft_spec[0], added_npts_left)
-        extra_right = np.linspace(0, fft_spec[-1], added_npts_right)
+    # Normalise to original max value
+    norm_factor = max(spec) / max(filled_spec[1000:-1000])
+    norm_filled_spec = filled_spec * norm_factor
 
-        # Determine new, zerofilled interferogram
-        fft_filled_spec = np.concatenate([extra_left, fft_spec, extra_right])
+    # Form the output DataArray
+    filled_spectrum = xr.DataArray(
+        data=norm_filled_spec,
+        coords={'Wavenumber': filled_grid},
+        attrs=spectrum.attrs
+    )
 
-        # Back to length space
-        filled_spec = abs(fft.ifft(fft_filled_spec))
-        filled_grid = np.linspace(min(grid), max(grid), req_npts)
-
-        # normalise to original max value
-        norm_factor = max(spec) / max(filled_spec[1000:-1000])
-        norm_filled_spec = filled_spec * norm_factor
-
-        # Form the output DataArray
-        filled_spectrum = xr.DataArray(
-            data=norm_filled_spec,
-            coords={'Wavenumber': filled_grid},
-            attrs=spectrum.attrs
-        )
-
-        return filled_spectrum
+    return filled_spectrum
 
 
 class FitResult(object):
