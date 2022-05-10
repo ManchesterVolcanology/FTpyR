@@ -89,7 +89,7 @@ class Analyser(object):
                  solar_flag=False, obs_height=0.0, update_params=True,
                  residual_limit=10, wn_pad=50, zero_fill_factor=0,
                  npts_per_cm=100, apod_function='NB_medium', outfile=None,
-                 tolerance=0.01, bg_behaviour='subtract', bg_spectrum=None):
+                 tolerance=0.001, bg_behaviour='subtract', bg_spectrum=None):
         """Initialise the Analyser."""
         # Generate the RFM object
         logger.debug('Setting up RFM')
