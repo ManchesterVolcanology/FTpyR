@@ -932,31 +932,11 @@ class MainWindow(QMainWindow):
                     vary=False
                 )
 
-                # Generate the analyser function
-                logger.info(f'Generating analyser for {name} window')
-                analyser = Analyser(
-                    params=params,
-                    rfm_path=widgetData['rfm_path'],
-                    hitran_path=widgetData['hitran_path'],
-                    wn_start=windowData['wn_start'],
-                    wn_stop=windowData['wn_stop'],
-                    zero_fill_factor=widgetData['zero_fill_factor'],
-                    solar_flag=widgetData['solar_flag'],
-                    obs_height=widgetData['obs_height'],
-                    update_params=widgetData['update_params'],
-                    residual_limit=widgetData['residual_limit'],
-                    npts_per_cm=50,
-                    apod_function=widgetData['apod_function'],
-                    outfile=f"{widgetData['save_dir']}/{name}_output.csv"
-                )
-
-                # Initialise the results table
-                self.initialize_results_table(name, analyser.params)
-
-                # raise Exception
-                worker = Worker(name, analyser)
+                # Generate the worker
+                worker = Worker(name, params, widgetData, windowData)
                 worker.signals.results.connect(self.get_results)
                 worker.signals.error.connect(self.update_error)
+                worker.signals.initialize.connect(self.initialize_table)
                 self.workers[name] = worker
                 self.ready_flags[name] = False
                 workers.append(worker)
@@ -1224,7 +1204,7 @@ class MainWindow(QMainWindow):
         """Update status bar."""
         self.statusBar().showMessage(status)
 
-    def initialize_results_table(self, name, params):
+    def initialize_table(self, name, params):
         """Initialize table rows."""
         # Clear all current rows
         self.results_tables[name].clearContents()
@@ -1459,22 +1439,26 @@ class WorkerSignals(QObject):
     results = Signal(tuple)
     finished = Signal()
     error = Signal(tuple)
+    initialize = Signal(str, object)
 
 
 class Worker(QRunnable):
     """."""
 
-    def __init__(self, name, analyser, *args, **kwargs):
+    def __init__(self, name, params, widgetData, windowData, *args, **kwargs):
         """."""
         super(Worker, self).__init__()
         self.name = name
-        self.analyser = analyser
         self.args = args
         self.kwargs = kwargs
         self.signals = WorkerSignals()
         self.isStopped = False
         self.isPaused = False
         self.spectrum = None
+        self.params = params
+        self.widgetData = widgetData
+        self.windowData = windowData
+        self.initialized = False
 
     @Slot()
     def run(self):
@@ -1484,11 +1468,34 @@ class Worker(QRunnable):
         except Exception:
             traceback.print_exc()
             exctype, value = sys.exc_info()[:2]
+            self.initialized = True
             self.signals.error.emit((exctype, value, traceback.format_exc()))
         logger.info(f'{self.name} analyser finished')
 
     def fn(self, name):
         """Main analysis loop."""
+        # Generate the analyser function
+        logger.info(f'Generating analyser for {name} window')
+        self.analyser = Analyser(
+            params=self.params,
+            rfm_path=self.widgetData['rfm_path'],
+            hitran_path=self.widgetData['hitran_path'],
+            wn_start=self.windowData['wn_start'],
+            wn_stop=self.windowData['wn_stop'],
+            zero_fill_factor=self.widgetData['zero_fill_factor'],
+            solar_flag=self.widgetData['solar_flag'],
+            obs_height=self.widgetData['obs_height'],
+            update_params=self.widgetData['update_params'],
+            residual_limit=self.widgetData['residual_limit'],
+            npts_per_cm=50,
+            apod_function=self.widgetData['apod_function'],
+            outfile=f"{self.widgetData['save_dir']}/{self.name}_output.csv"
+        )
+
+        self.signals.initialize.emit(name, self.analyser)
+        print(self.name)
+        self.initialized = True
+
         while not self.isStopped:
             if self.spectrum is not None and not self.isPaused:
                 fit = self.analyser.fit(self.spectrum)
