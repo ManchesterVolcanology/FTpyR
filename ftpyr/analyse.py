@@ -189,7 +189,7 @@ class Analyser(object):
                 ofile.write('Filename,Timestamp')
                 for p in params.values():
                     ofile.write(f',{p.name},{p.name}_err')
-                ofile.write(',FitQuality\n')
+                ofile.write(',FitQuality,MaxResidual,StdevResidual\n')
 
     def fit(self, spectrum, calc_od='all'):
         """Fit the provided spectrum.
@@ -285,7 +285,9 @@ class Analyser(object):
                     ofile.write(f',{p.fit_val},{p.fit_err}')
 
                 # New line
-                ofile.write(f',{fit.nerr}\n')
+                ofile.write(
+                    f',{fit.nerr},{fit.max_residual},{fit.std_residual}\n'
+                )
 
         return fit
 
