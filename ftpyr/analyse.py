@@ -581,6 +581,15 @@ class FitResult(object):
                 self.grid
             )
 
+            # Calculate the intensity offset
+            offset_polyvars = np.flip(
+                [p.fit_val for p in self.params.values() if 'offset' in p.name]
+            )
+            if len(offset_polyvars) > 0:
+                self.offset = np.polyval(offset_polyvars, self.grid)
+            else:
+                self.offset = np.full(len(self.spec), np.nan)
+
             # Calculate optical depth spectra
             if calc_od == 'all':
                 calc_od = [par.name for par in self.params.values()
@@ -597,6 +606,7 @@ class FitResult(object):
             self.max_residual = np.nan
             self.std_residual = np.nan
             self.bg_poly = np.full(len(self.spec), np.nan)
+            self.offset = np.full(len(self.spec), np.nan)
             for par in calc_od:
                 if par in self.params:
                     self.meas_od[par] = np.full(len(self.spec), np.nan)
