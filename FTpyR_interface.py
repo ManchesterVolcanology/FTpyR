@@ -206,6 +206,7 @@ class MainWindow(QMainWindow):
         self.plot_regions = {}
         self.results_tables = {}
         self.species_list = {}
+        self.fit_results = {}
 
         # Read in gas list
         with open('databases/atm_layer.yml', 'r') as ymlfile:
