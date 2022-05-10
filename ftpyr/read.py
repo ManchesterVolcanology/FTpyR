@@ -221,7 +221,7 @@ def read_spectacle(filename):
     # Unpack the desired variables
     wn_start = float(hdata[1])
     wn_stop = float(hdata[2])
-    # wn_step = float(hdata[3])
+    wn_step = float(hdata[3])
     date_str = hdata[5].replace(b'\x00', b' ').decode("utf-8")
     npts = int(hdata[7])
 
@@ -238,9 +238,8 @@ def read_spectacle(filename):
     ydata = np.array(
         [yi for yi in struct.iter_unpack('<i', spec_data)]
     ).flatten()
-    # ydata = ydata / np.nanmax(ydata)
 
-    # Calculate the wavenuer grid
+    # Calculate the wavenumber grid
     xdata = np.linspace(wn_start, wn_stop, num=npts)
 
     # Form the output DataArray
