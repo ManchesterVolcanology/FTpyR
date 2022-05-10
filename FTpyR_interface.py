@@ -205,7 +205,6 @@ class MainWindow(QMainWindow):
         self.plot_lines = {}
         self.plot_regions = {}
         self.results_tables = {}
-        self.fit_results = {}
         self.species_list = {}
 
         # Read in gas list
@@ -372,6 +371,39 @@ class MainWindow(QMainWindow):
         # New row
         spec_layout.addWidget(QHLine(), 2, 0, 1, 10)
 
+        # Add control for updating parameters
+        self.widgets['solar_flag'] = QCheckBox('Solar\nOccultation')
+        spec_layout.addWidget(self.widgets['solar_flag'], 3, 0)
+
+        # Add control for maximum residual
+        spec_layout.addWidget(QRightLabel('Observation\nHeight (m)'), 3, 1)
+        self.widgets['obs_height'] = DSpinBox(0, [0, 100000], 0.1)
+        spec_layout.addWidget(self.widgets['obs_height'], 3, 2)
+        self.widgets['solar_flag'].stateChanged.connect(
+            lambda: self.widgets['obs_height'].setDisabled(
+                not self.widgets['solar_flag'].isChecked()
+            )
+        )
+        self.widgets['solar_flag'].setChecked(False)
+
+        # New row
+        spec_layout.addWidget(QHLine(), 4, 0, 1, 10)
+
+        # Add control for updating parameters
+        self.widgets['update_params'] = QCheckBox('Update Fit\nParameters?')
+        spec_layout.addWidget(self.widgets['update_params'], 5, 0)
+
+        # Add control for maximum residual
+        spec_layout.addWidget(QRightLabel('Good Fit\nResidual Limit'), 5, 1)
+        self.widgets['residual_limit'] = DSpinBox(10, [0, 1000], 0.1)
+        spec_layout.addWidget(self.widgets['residual_limit'], 5, 2)
+        self.widgets['update_params'].stateChanged.connect(
+            lambda: self.widgets['residual_limit'].setDisabled(
+                not self.widgets['update_params'].isChecked()
+            )
+        )
+        self.widgets['update_params'].setChecked(False)
+
     def _createLogs(self):
         """Generate program log widgets."""
         layout = QGridLayout(self.logFrame)
@@ -495,6 +527,12 @@ class MainWindow(QMainWindow):
         self.widgets['ratio_fit_errors'].stateChanged.connect(
             self.update_ratio_plot)
 
+        # Add option to remove bad fits
+        self.widgets['bad_fit_flag'] = QCheckBox('Remove\nBad Fits?')
+        layout.addWidget(self.widgets['bad_fit_flag'], 1, 6)
+        self.widgets['bad_fit_flag'].stateChanged.connect(
+            self.update_ratio_plot)
+
         # Generate the plot
         ratio_area = da.DockArea()
         layout.addWidget(ratio_area, 2, 0, 1, 7)
@@ -509,12 +547,15 @@ class MainWindow(QMainWindow):
 
         # Generate plot lines
         l1 = pg.ErrorBarItem()
-        l2 = ax1.plot(pen=pg.mkPen(color=self.PLOTCOLORS[1], width=1.0))
+        l2 = pg.ScatterPlotItem(size=10, symbol='x',
+                                pen=pg.mkPen(color=self.PLOTCOLORS[0]))
+        l3 = ax1.plot(pen=pg.mkPen(color=self.PLOTCOLORS[1], width=1.0))
         ax1.addItem(l1)
+        ax1.addItem(l2)
 
         # Store graph objects
         self.plot_axes['main'] = [ax0, ax1]
-        self.plot_lines['main'] = [l0, l1, l2]
+        self.plot_lines['main'] = [l0, l1, l2, l3]
 
     # =========================================================================
     # Add fit window
@@ -581,11 +622,11 @@ class MainWindow(QMainWindow):
         paramTabHolder.addTab(offsetTab, 'Offset')
 
         # Add parameter tables
-        winWidgets['gasTable'] = paramTable(gasTab, 'param', 420, 200,
+        winWidgets['gasTable'] = paramTable(gasTab, 'param', 420, 400,
                                             self.gas_list.keys())
-        winWidgets['shiftTable'] = paramTable(shiftTab, 'poly', 300, 200)
-        winWidgets['bgpolyTable'] = paramTable(bgpolyTab, 'poly', 300, 200)
-        winWidgets['offsetTable'] = paramTable(offsetTab, 'poly', 300, 200)
+        winWidgets['shiftTable'] = paramTable(shiftTab, 'poly', 300, 400)
+        winWidgets['bgpolyTable'] = paramTable(bgpolyTab, 'poly', 300, 400)
+        winWidgets['offsetTable'] = paramTable(offsetTab, 'poly', 300, 400)
 
         # Link the parameter table to the plot parameter combobox
         winWidgets['gasTable'].cellChanged.connect(
@@ -611,6 +652,9 @@ class MainWindow(QMainWindow):
         winWidgets['target_species'] = QComboBox()
         winWidgets['target_species'].addItems([''])
         layout.addWidget(winWidgets['target_species'], 0, 1)
+        winWidgets['target_species'].currentTextChanged.connect(
+            lambda: self.update_window_plots(name)
+        )
 
         # Generate the graph window
         area = da.DockArea()
@@ -649,19 +693,25 @@ class MainWindow(QMainWindow):
         # Greate the plot lines
         pen0 = pg.mkPen(color=self.PLOTCOLORS[0], width=1.0)
         pen1 = pg.mkPen(color=self.PLOTCOLORS[1], width=1.0)
+        pen2 = pg.mkPen(color=self.PLOTCOLORS[2], width=1.0, style=Qt.DashLine)
+        pen3 = pg.mkPen(color=self.PLOTCOLORS[3], width=1.0, style=Qt.DashLine)
         l0 = ax0.plot(pen=pen0)  # Measured spectrum
         l1 = ax0.plot(pen=pen1)  # Fitted spectrum
-        l2 = ax1.plot(pen=pen0)  # residual
-        l3 = ax2.plot(pen=pen0)  # Measured OD
-        l4 = ax2.plot(pen=pen1)  # Fitted OD
+        l2 = ax0.plot(pen=pen2)  # Background poly
+        l3 = ax0.plot(pen=pen3)  # Offset
+        l4 = ax1.plot(pen=pen0)  # residual
+        l5 = ax2.plot(pen=pen0)  # Measured OD
+        l6 = ax2.plot(pen=pen1)  # Fitted OD
 
         # Add legend to first axis
         legend = ax0.addLegend()
         legend.addItem(l0, 'Spectrum')
         legend.addItem(l1, 'Fit')
+        legend.addItem(l2, 'Background')
+        legend.addItem(l3, 'Offset')
 
         self.plot_axes[name] = [ax0, ax1, ax2]
-        self.plot_lines[name] = [l0, l1, l2, l3, l4]
+        self.plot_lines[name] = [l0, l1, l2, l3, l4, l5, l6]
 
         # Add fit regions to main plot and connect to the wavenumber bounds
         self.plot_regions[name] = pg.LinearRegionItem([0, 0])
@@ -814,6 +864,9 @@ class MainWindow(QMainWindow):
         # Create worker list
         workers = []
 
+        # Create dictionary to hold fit results
+        self.fit_results = {}
+
         self.update_status('Initialising')
 
         # Open main output file
@@ -849,7 +902,10 @@ class MainWindow(QMainWindow):
                         f',{line[0]} ({name}),{line[0]}_err ({name})'
                     )
 
-                outfile.write(f',FitQuality ({name})')
+                outfile.write(
+                    f',FitQuality ({name}),MaxResidual ({name}),'
+                    f'StdevResidual ({name})'
+                )
 
                 # Add background parameters
                 for i, line in enumerate(windowData['bgpolyTable']):
@@ -884,10 +940,10 @@ class MainWindow(QMainWindow):
                     wn_start=windowData['wn_start'],
                     wn_stop=windowData['wn_stop'],
                     zero_fill_factor=widgetData['zero_fill_factor'],
-                    solar_flag=False,
-                    obs_height=0.0,
-                    update_params=True,
-                    residual_limit=50,
+                    solar_flag=widgetData['solar_flag'],
+                    obs_height=widgetData['obs_height'],
+                    update_params=widgetData['update_params'],
+                    residual_limit=widgetData['residual_limit'],
                     npts_per_cm=50,
                     apod_function=widgetData['apod_function'],
                     outfile=f"{widgetData['save_dir']}/{name}_output.csv"
@@ -954,24 +1010,7 @@ class MainWindow(QMainWindow):
         self.fit_results[name] = fit
 
         if fit is not None:
-            # Get the plot parameter
-            plot_gas = self.windowWidgets[name].get('target_species')
-
-            # Update the fit plot
-            self.plot_lines[name][0].setData(fit.grid, fit.spec)
-            self.plot_lines[name][1].setData(fit.grid, fit.fit)
-            self.plot_lines[name][2].setData(fit.grid, fit.residual)
-            self.plot_lines[name][3].setData(fit.grid, fit.meas_od[plot_gas])
-            self.plot_lines[name][4].setData(fit.grid, fit.fit_od[plot_gas])
-
-            # Update results table
-            for i, p in enumerate(fit.params.values()):
-                self.results_tables[name].setItem(
-                    i, 2, QTableWidgetItem(str(p.fit_val))
-                )
-                self.results_tables[name].setItem(
-                    i, 3, QTableWidgetItem(str(p.fit_err))
-                )
+            self.update_window_plots(name)
 
         # Update worker ready flag
         self.ready_flags[name] = True
@@ -996,7 +1035,9 @@ class MainWindow(QMainWindow):
                             outfile.write(f',{par.fit_val},{par.fit_err}')
 
                     # Write the fit quality result
-                    outfile.write(f',{fit.nerr}')
+                    outfile.write(
+                        f',{fit.nerr},{fit.max_residual},{fit.std_residual}'
+                    )
                 outfile.write('\n')
 
             # If so, check if all spectra have been analysed
@@ -1040,6 +1081,39 @@ class MainWindow(QMainWindow):
         y = self.spectrum.to_numpy()
         self.plot_lines['main'][0].setData(x, y)
 
+    def update_window_plots(self, name):
+        """."""
+        try:
+            # Pull the window results
+            fit = self.fit_results[name]
+        except KeyError:
+            return
+
+        # Get the plot parameter
+        plot_gas = self.windowWidgets[name].get('target_species')
+
+        # Update the fit plot
+        self.plot_lines[name][0].setData(fit.grid, fit.spec)
+        self.plot_lines[name][1].setData(fit.grid, fit.fit)
+        self.plot_lines[name][2].setData(fit.grid, fit.bg_poly)
+        self.plot_lines[name][3].setData(fit.grid, fit.offset)
+        self.plot_lines[name][4].setData(fit.grid, fit.residual)
+
+        try:
+            self.plot_lines[name][5].setData(fit.grid, fit.meas_od[plot_gas])
+            self.plot_lines[name][6].setData(fit.grid, fit.fit_od[plot_gas])
+        except KeyError:
+            pass
+
+        # Update results table
+        for i, p in enumerate(fit.params.values()):
+            self.results_tables[name].setItem(
+                i, 2, QTableWidgetItem(str(p.fit_val))
+            )
+            self.results_tables[name].setItem(
+                i, 3, QTableWidgetItem(str(p.fit_err))
+            )
+
     def update_ratio_plot(self):
         """Update the data shown on the ratio plot."""
         # Read in the time series results for the ratio plots
@@ -1053,12 +1127,15 @@ class MainWindow(QMainWindow):
         ygas = self.widgets.get('ratioSpeciesY')
 
         try:
+            # Remove bad fits if desired
+            if self.widgets.get('bad_fit_flag'):
+                idx = np.logical_and(
+                    df[f'FitQuality ({xwin})'] == 0,
+                    df[f'FitQuality ({ywin})'] == 0
+                )
+                df = df[idx]
+
             # Unpack good fit values and errors
-            idx = np.logical_and(
-                df[f'FitQuality ({xwin})'] == 0,
-                df[f'FitQuality ({ywin})'] == 0
-            )
-            df = df[idx]
             xval = df[f'{xgas} ({xwin})'].to_numpy()
             xerr = df[f'{xgas}_err ({xwin})'].to_numpy()
             yval = df[f'{ygas} ({ywin})'].to_numpy()
@@ -1066,8 +1143,9 @@ class MainWindow(QMainWindow):
 
             # Update plot
             self.plot_lines['main'][1].setData(
-                x=xval, y=yval, height=yerr, width=xerr, beam=2,
+                x=xval, y=yval, height=yerr, width=xerr, beam=10,
                 pen=pg.mkPen(color=self.PLOTCOLORS[0], width=0.0))
+            self.plot_lines['main'][2].setData(x=xval, y=yval)
 
             # Fit linear regression if there is more than 1 point
             if len(xval) > 1:
@@ -1107,7 +1185,7 @@ class MainWindow(QMainWindow):
                 yfit = lin_fit(xfit, *popt)
 
                 # pdate the plots
-                self.plot_lines['main'][2].setData(xfit, yfit)
+                self.plot_lines['main'][3].setData(xfit, yfit)
                 self.ratio_gradient.setText(
                     f'{popt[0]:.2E}\n(+/- {perr[0]:.2E})')
                 self.ratio_intercept.setText(
@@ -1115,7 +1193,7 @@ class MainWindow(QMainWindow):
 
             # Otherwise clear the graphs
             else:
-                self.plot_lines['main'][2].setData([], [])
+                self.plot_lines['main'][3].setData([], [])
                 self.ratio_gradient.setText('-')
                 self.ratio_intercept.setText('-')
         except KeyError:
@@ -1309,29 +1387,27 @@ class MainWindow(QMainWindow):
 
             # Apply each config setting
             for label, value in config.items():
-                try:
-                    # Set the fit windows
-                    if label == 'fitWindows':
-                        for name, widgets in value.items():
 
-                            # Generate the window tabs
-                            self.addFitWindow(name)
+                # Set the fit windows
+                if label == 'fitWindows':
+                    for name, widgets in value.items():
 
-                            for key, val in widgets.items():
+                        # Generate the window tabs
+                        self.addFitWindow(name)
 
-                                # Setup the parameter tables
-                                if key in tableKeys:
-                                    self.windowWidgets[name][key].setData(val)
-                                else:
-                                    self.windowWidgets[name].set(key, val)
+                        for key, val in widgets.items():
 
-                    elif label == 'theme':
-                        self.theme = value
+                            # Setup the parameter tables
+                            if key in tableKeys:
+                                self.windowWidgets[name][key].setData(val)
+                            else:
+                                self.windowWidgets[name].set(key, val)
 
-                    else:
-                        self.widgets.set(label, value)
-                except Exception:
-                    logger.warning(f'Failed to load {label} from config file')
+                elif label == 'theme':
+                    self.theme = value
+
+                else:
+                    self.widgets.set(label, value)
 
             # Update the config file settings
             self.config_fname = fname
@@ -1521,7 +1597,7 @@ class Widgets(dict):
         """Set the value of a widget."""
         if key not in self.keys():
             logger.warning(f'{key} widget not found!')
-        if type(self[key]) in [QTextEdit, QLineEdit]:
+        elif type(self[key]) in [QTextEdit, QLineEdit]:
             self[key].setText(str(value))
         elif type(self[key]) == QComboBox:
             index = self[key].findText(value, Qt.MatchFixedString)
