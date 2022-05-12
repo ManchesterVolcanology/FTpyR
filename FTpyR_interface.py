@@ -657,9 +657,20 @@ class MainWindow(QMainWindow):
             lambda: self.update_window_plots(name)
         )
 
+        # Set control for plot options
+        winWidgets['plot_i0'] = QCheckBox('Show I0?\n(Green)')
+        layout.addWidget(winWidgets['plot_i0'], 0, 2)
+        winWidgets['plot_bg'] = QCheckBox('Show Background?\n(Purple)')
+        layout.addWidget(winWidgets['plot_bg'], 0, 3)
+        winWidgets['plot_os'] = QCheckBox('Show Offset?\n(Red)')
+        layout.addWidget(winWidgets['plot_os'], 0, 4)
+
+        for cb in [winWidgets[k]for k in ['plot_i0', 'plot_bg', 'plot_os']]:
+            cb.stateChanged.connect(lambda: self.update_window_plots(name))
+
         # Generate the graph window
         area = da.DockArea()
-        layout.addWidget(area, 1, 0, 1, 5)
+        layout.addWidget(area, 1, 0, 1, 6)
         layout.addWidget(QLabel('Wavenumber (cm-1)'), 2, 2)
 
         # Generate the docks
@@ -696,23 +707,23 @@ class MainWindow(QMainWindow):
         pen1 = pg.mkPen(color=self.PLOTCOLORS[1], width=1.0)
         pen2 = pg.mkPen(color=self.PLOTCOLORS[2], width=1.0, style=Qt.DashLine)
         pen3 = pg.mkPen(color=self.PLOTCOLORS[3], width=1.0, style=Qt.DashLine)
+        pen4 = pg.mkPen(color=self.PLOTCOLORS[4], width=1.0, style=Qt.DashLine)
         l0 = ax0.plot(pen=pen0)  # Measured spectrum
         l1 = ax0.plot(pen=pen1)  # Fitted spectrum
-        l2 = ax0.plot(pen=pen2)  # Background poly
-        l3 = ax0.plot(pen=pen3)  # Offset
-        l4 = ax1.plot(pen=pen0)  # residual
-        l5 = ax2.plot(pen=pen0)  # Measured OD
-        l6 = ax2.plot(pen=pen1)  # Fitted OD
+        l2 = ax0.plot(pen=pen2)  # I0
+        l3 = ax0.plot(pen=pen4)  # Background poly
+        l4 = ax0.plot(pen=pen3)  # Offset
+        l5 = ax1.plot(pen=pen0)  # residual
+        l6 = ax2.plot(pen=pen0)  # Measured OD
+        l7 = ax2.plot(pen=pen1)  # Fitted OD
 
         # Add legend to first axis
         legend = ax0.addLegend()
         legend.addItem(l0, 'Spectrum')
         legend.addItem(l1, 'Fit')
-        legend.addItem(l2, 'Background')
-        legend.addItem(l3, 'Offset')
 
         self.plot_axes[name] = [ax0, ax1, ax2]
-        self.plot_lines[name] = [l0, l1, l2, l3, l4, l5, l6]
+        self.plot_lines[name] = [l0, l1, l2, l3, l4, l5, l6, l7]
 
         # Add fit regions to main plot and connect to the wavenumber bounds
         self.plot_regions[name] = pg.LinearRegionItem([0, 0])
@@ -987,20 +998,20 @@ class MainWindow(QMainWindow):
 
     def send_spectrum(self, spectrum):
         """Send spectrum to workers to analyse."""
-        for name, worker in self.workers.items():
-            worker.setSpectrum(spectrum)
+        for name, worker in self.analysisWorkers.items():
+            worker.spectrum = spectrum
             self.ready_flags[name] = False
 
     def stop_analysis(self):
         """Stop analysis."""
-        for name, worker in self.workers.items():
+        for name, worker in self.analysisWorkers.items():
             worker.stop()
         self.analysis_complete()
 
     def pause_analysis(self):
         """Pause the workers."""
         # Pause each worker
-        for name, worker in self.workers.items():
+        for name, worker in self.analysisWorkers.items():
             worker.pause()
 
         # Update button label
@@ -1104,13 +1115,30 @@ class MainWindow(QMainWindow):
         # Update the fit plot
         self.plot_lines[name][0].setData(fit.grid, fit.spec)
         self.plot_lines[name][1].setData(fit.grid, fit.fit)
-        self.plot_lines[name][2].setData(fit.grid, fit.bg_poly)
-        self.plot_lines[name][3].setData(fit.grid, fit.offset)
-        self.plot_lines[name][4].setData(fit.grid, fit.residual)
 
+        # Add optional lines
+        if self.windowWidgets[name].get('plot_i0'):
+            self.plot_lines[name][2].setData(
+                fit.grid, fit.bg_poly + np.nan_to_num(fit.offset)
+            )
+        else:
+            self.plot_lines[name][2].setData([], [])
+        if self.windowWidgets[name].get('plot_bg'):
+            self.plot_lines[name][3].setData(fit.grid, fit.bg_poly)
+        else:
+            self.plot_lines[name][3].setData([], [])
+        if self.windowWidgets[name].get('plot_os'):
+            self.plot_lines[name][4].setData(fit.grid, fit.offset)
+        else:
+            self.plot_lines[name][4].setData([], [])
+
+        # Add residual
+        self.plot_lines[name][5].setData(fit.grid, fit.residual)
+
+        # Add optical depths
         try:
-            self.plot_lines[name][5].setData(fit.grid, fit.meas_od[plot_gas])
-            self.plot_lines[name][6].setData(fit.grid, fit.fit_od[plot_gas])
+            self.plot_lines[name][6].setData(fit.grid, fit.meas_od[plot_gas])
+            self.plot_lines[name][7].setData(fit.grid, fit.fit_od[plot_gas])
         except KeyError:
             pass
 
