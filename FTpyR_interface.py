@@ -623,11 +623,11 @@ class MainWindow(QMainWindow):
         paramTabHolder.addTab(offsetTab, 'Offset')
 
         # Add parameter tables
-        winWidgets['gasTable'] = paramTable(gasTab, 'param', 420, 400,
-                                            self.gas_list.keys())
-        winWidgets['shiftTable'] = paramTable(shiftTab, 'poly', 300, 400)
-        winWidgets['bgpolyTable'] = paramTable(bgpolyTab, 'poly', 300, 400)
-        winWidgets['offsetTable'] = paramTable(offsetTab, 'poly', 300, 400)
+        winWidgets['gasTable'] = paramTable(gasTab, 'param', width=420,
+                                            gas_list=self.gas_list.keys())
+        winWidgets['shiftTable'] = paramTable(shiftTab, 'poly', width=300)
+        winWidgets['bgpolyTable'] = paramTable(bgpolyTab, 'poly', width=300)
+        winWidgets['offsetTable'] = paramTable(offsetTab, 'poly', width=300)
 
         # Link the parameter table to the plot parameter combobox
         winWidgets['gasTable'].cellChanged.connect(
