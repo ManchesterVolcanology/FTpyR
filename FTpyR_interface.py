@@ -413,7 +413,7 @@ class MainWindow(QMainWindow):
         # Add button to begin analysis
         self.start_btn = QPushButton('Begin!')
         self.start_btn.setToolTip('Begin spectra analysis')
-        self.start_btn.clicked.connect(self.begin_analysis)
+        self.start_btn.clicked.connect(self.control_loop)
         self.start_btn.setFixedSize(90, 25)
         layout.addWidget(self.start_btn, 0, 1)
 
@@ -851,22 +851,13 @@ class MainWindow(QMainWindow):
     # Analysis loop and slots
     # =========================================================================
 
-    def begin_analysis(self):
-        """Run main analysis loop."""
+    def control_loop(self):
+        """Controls initialisation and analysis."""
+        window_params = {}
+        self.analysers = {}
+
         # Pull the widget data
         widgetData = self.getWidgetData()
-        self.workers = {}
-        self.ready_flags = {}
-
-        # Get the spectra to analyse
-        self.spectra_list = widgetData['spec_fnames'].split('\n')
-        self.spectrum_counter = 0
-
-        # Create worker list
-        workers = []
-
-        # Create dictionary to hold fit results
-        self.fit_results = {}
 
         self.update_status('Initialising')
 
@@ -874,9 +865,10 @@ class MainWindow(QMainWindow):
         self.outfname = f"{widgetData['save_dir']}/all_gas_output.csv"
         with open(self.outfname, 'w') as outfile:
 
+            # Start header line
             outfile.write('Filename,Timestamp')
 
-            # Generate the thread workers
+            # Generate the initialisation workers
             for name in self.windows:
 
                 windowData = widgetData['fitWindows'][name]
@@ -932,22 +924,58 @@ class MainWindow(QMainWindow):
                     vary=False
                 )
 
-                # Generate the worker
-                worker = Worker(name, params, widgetData, windowData)
-                worker.signals.results.connect(self.get_results)
-                worker.signals.error.connect(self.update_error)
-                worker.signals.initialize.connect(self.initialize_table)
-                self.workers[name] = worker
-                self.ready_flags[name] = False
-                workers.append(worker)
+                # Add to the global params dictionary
+                window_params[name] = params
 
-            outfile.write('\n')
+        # Generate the setup worker
+        setupWorker = SetupWorker(window_params, widgetData)
+        setupWorker.signals.error.connect(self.update_error)
+        setupWorker.signals.initialize.connect(self.initialize_window)
+        setupWorker.signals.finished.connect(self.begin_analysis)
+        self.threadpool.start(setupWorker)
 
-        # Begin the workers
-        for worker in workers:
-            self.threadpool.start(worker)
+    def initialize_window(self, name, analyser):
+        """Initialize analyser and results table."""
+        # Add the analyser to the dictionary
+        self.analysers[name] = analyser
+
+        # Clear all current table rows
+        self.results_tables[name].clearContents()
+
+        # Make the rows
+        self.results_tables[name].setRowCount(len(analyser.params.keys()))
+
+        for i, [pname, param] in enumerate(analyser.params.items()):
+            self.results_tables[name].setItem(i, 0, QTableWidgetItem(pname))
+            self.results_tables[name].setItem(
+                i, 1, QTableWidgetItem(str(param.vary)))
+
+    def begin_analysis(self):
+        """Run main analysis loop."""
+        # Pull the widget data
+        widgetData = self.getWidgetData()
+        self.analysisWorkers = {}
+        self.ready_flags = {}
+
+        # Get the spectra to analyse
+        self.spectra_list = widgetData['spec_fnames'].split('\n')
+        self.spectrum_counter = 0
+
+        # Create dictionary to hold fit results
+        self.fit_results = {}
 
         self.update_status('Analysing')
+
+        # Generate the thread workers
+        for name in self.windows:
+
+            # Generate the worker
+            analysisWorker = AnalysisWorker(name, self.analysers[name])
+            analysisWorker.signals.results.connect(self.get_results)
+            analysisWorker.signals.error.connect(self.update_error)
+            self.analysisWorkers[name] = analysisWorker
+            self.ready_flags[name] = False
+            self.threadpool.start(analysisWorker)
 
         # Send the first spectrum
         self.set_next_spectrum()
@@ -1204,19 +1232,6 @@ class MainWindow(QMainWindow):
         """Update status bar."""
         self.statusBar().showMessage(status)
 
-    def initialize_table(self, name, params):
-        """Initialize table rows."""
-        # Clear all current rows
-        self.results_tables[name].clearContents()
-
-        # Make the rows
-        self.results_tables[name].setRowCount(len(params.keys()))
-
-        for i, [pname, param] in enumerate(params.items()):
-            self.results_tables[name].setItem(i, 0, QTableWidgetItem(pname))
-            self.results_tables[name].setItem(
-                i, 1, QTableWidgetItem(str(param.vary)))
-
     # =========================================================================
     # Program Global Slots
     # =========================================================================
@@ -1442,12 +1457,66 @@ class WorkerSignals(QObject):
     initialize = Signal(str, object)
 
 
-class Worker(QRunnable):
+class SetupWorker(QRunnable):
     """."""
 
-    def __init__(self, name, params, widgetData, windowData, *args, **kwargs):
+    def __init__(self, window_params, widgetData, *args, **kwargs):
         """."""
-        super(Worker, self).__init__()
+        super(SetupWorker, self).__init__()
+        self.args = args
+        self.kwargs = kwargs
+        self.signals = WorkerSignals()
+        self.window_params = window_params
+        self.widgetData = widgetData
+
+    @Slot()
+    def run(self):
+        """."""
+        try:
+            self.fn(*self.args, **self.kwargs)
+        except Exception:
+            traceback.print_exc()
+            exctype, value = sys.exc_info()[:2]
+            self.signals.error.emit((exctype, value, traceback.format_exc()))
+        self.signals.finished.emit()
+
+    def fn(self):
+        """Main setup loop."""
+        # Loop through windows
+        for name, params in self.window_params.items():
+
+            # Pull the window data
+            windowData = self.widgetData['fitWindows'][name]
+
+            # Generate the analyser function
+            logger.info(f'Generating analyser for {name} window')
+            self.analyser = Analyser(
+                params=params,
+                rfm_path=self.widgetData['rfm_path'],
+                hitran_path=self.widgetData['hitran_path'],
+                wn_start=windowData['wn_start'],
+                wn_stop=windowData['wn_stop'],
+                zero_fill_factor=self.widgetData['zero_fill_factor'],
+                solar_flag=self.widgetData['solar_flag'],
+                obs_height=self.widgetData['obs_height'],
+                update_params=self.widgetData['update_params'],
+                residual_limit=self.widgetData['residual_limit'],
+                npts_per_cm=50,
+                apod_function=self.widgetData['apod_function'],
+                outfile=f"{self.widgetData['save_dir']}/{name}_output.csv"
+            )
+
+            self.signals.initialize.emit(name, self.analyser)
+
+        logger.info('All windows initialised')
+
+
+class AnalysisWorker(QRunnable):
+    """."""
+
+    def __init__(self, name, analyser, *args, **kwargs):
+        """."""
+        super(AnalysisWorker, self).__init__()
         self.name = name
         self.args = args
         self.kwargs = kwargs
@@ -1455,9 +1524,7 @@ class Worker(QRunnable):
         self.isStopped = False
         self.isPaused = False
         self.spectrum = None
-        self.params = params
-        self.widgetData = widgetData
-        self.windowData = windowData
+        self.analyser = analyser
         self.initialized = False
 
     @Slot()
@@ -1474,39 +1541,13 @@ class Worker(QRunnable):
 
     def fn(self, name):
         """Main analysis loop."""
-        # Generate the analyser function
-        logger.info(f'Generating analyser for {name} window')
-        self.analyser = Analyser(
-            params=self.params,
-            rfm_path=self.widgetData['rfm_path'],
-            hitran_path=self.widgetData['hitran_path'],
-            wn_start=self.windowData['wn_start'],
-            wn_stop=self.windowData['wn_stop'],
-            zero_fill_factor=self.widgetData['zero_fill_factor'],
-            solar_flag=self.widgetData['solar_flag'],
-            obs_height=self.widgetData['obs_height'],
-            update_params=self.widgetData['update_params'],
-            residual_limit=self.widgetData['residual_limit'],
-            npts_per_cm=50,
-            apod_function=self.widgetData['apod_function'],
-            outfile=f"{self.widgetData['save_dir']}/{self.name}_output.csv"
-        )
-
-        self.signals.initialize.emit(name, self.analyser)
-        print(self.name)
-        self.initialized = True
-
         while not self.isStopped:
             if self.spectrum is not None and not self.isPaused:
                 fit = self.analyser.fit(self.spectrum)
                 self.spectrum = None
                 self.signals.results.emit([name, fit])
             else:
-                time.sleep(0.01)
-
-    def setSpectrum(self, spectrum):
-        """Set new spectrum to analyse."""
-        self.spectrum = spectrum
+                time.sleep(0.001)
 
     def pause(self):
         """Pause the analysis."""
