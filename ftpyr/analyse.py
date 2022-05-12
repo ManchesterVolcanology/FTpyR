@@ -636,7 +636,7 @@ class FitResult(object):
 
         # Calculate the intensity offset
         offset_coefs = [p[n] for n in p if 'offset' in n]
-        offset = np.polyval(offset_coefs, self.analyser.model_grid)
+        offset = np.polyval(np.flip(offset_coefs), self.analyser.model_grid)
         offset = griddata(shift_model_grid,
                           offset,
                           self.grid,
@@ -645,10 +645,14 @@ class FitResult(object):
         # Calculate the parameter od
         par_od = np.multiply(params[par_name].xsec_od, p[par_name])
 
+        par_T = np.exp(-par_od)
+
+        ils_par_T = np.convolve(par_T, self.analyser.ils, mode='same')
+
+        ils_par_od = -np.log(ils_par_T)
+
         # Convolve with the ILS and interpolate onto the measurement grid
-        par_od = griddata(shift_model_grid,
-                          np.convolve(par_od, self.analyser.ils, mode='same'),
-                          self.grid)
+        par_od = griddata(shift_model_grid, ils_par_od, self.grid)
 
         # Add to self
         self.meas_od[par_name] = -np.log(np.divide(self.spec-offset, fit))
