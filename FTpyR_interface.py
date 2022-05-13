@@ -938,6 +938,9 @@ class MainWindow(QMainWindow):
                 # Add to the global params dictionary
                 window_params[name] = params
 
+            # Start a new line from the header
+            outfile.write('\n')
+
         # Generate the setup worker
         setupWorker = SetupWorker(window_params, widgetData)
         setupWorker.signals.error.connect(self.update_error)
