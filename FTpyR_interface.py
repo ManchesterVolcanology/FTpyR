@@ -614,25 +614,51 @@ class MainWindow(QMainWindow):
         paramTabHolder = QTabWidget()
         layout.addWidget(paramTabHolder, 2, 0, 1, 4)
         gasTab = QScrollArea()
-        shiftTab = QScrollArea()
-        bgpolyTab = QScrollArea()
-        offsetTab = QScrollArea()
-        paramTabHolder.addTab(gasTab, 'Gases')
-        paramTabHolder.addTab(shiftTab, 'Shift')
-        paramTabHolder.addTab(bgpolyTab, 'Background')
-        paramTabHolder.addTab(offsetTab, 'Offset')
+        paramTab = QScrollArea()
+        paramTabHolder.addTab(gasTab, 'Gas Parameters')
+        paramTabHolder.addTab(paramTab, 'Other Parameters')
 
         # Add parameter tables
         winWidgets['gasTable'] = paramTable(gasTab, 'param', width=420,
                                             gas_list=self.gas_list.keys())
-        winWidgets['shiftTable'] = paramTable(shiftTab, 'poly', width=300)
-        winWidgets['bgpolyTable'] = paramTable(bgpolyTab, 'poly', width=300)
-        winWidgets['offsetTable'] = paramTable(offsetTab, 'poly', width=300)
 
         # Link the parameter table to the plot parameter combobox
         winWidgets['gasTable'].cellChanged.connect(
             lambda: self.update_plot_species(name)
         )
+
+        playout = QGridLayout(paramTab)
+        playout.setAlignment(Qt.AlignTop)
+
+        # Background apriori
+        playout.addWidget(QLabel('Apriori\nBackground'), 0, 0)
+        winWidgets['bg_poly_apriori'] = DSpinBox(0, [0, 1e30])
+        playout.addWidget(winWidgets['bg_poly_apriori'], 0, 1)
+
+        # Background n params
+        playout.addWidget(QLabel('Num. Background\nParams'), 0, 3)
+        winWidgets['n_bg_poly'] = SpinBox(0, [0, 100])
+        playout.addWidget(winWidgets['n_bg_poly'], 0, 4)
+
+        # Shift n params and apriori
+        playout.addWidget(QLabel('Apriori\nShift'), 1, 0)
+        winWidgets['shift_apriori'] = DSpinBox(0, [-1000, 1000])
+        playout.addWidget(winWidgets['shift_apriori'], 1, 1)
+        winWidgets['fit_shift'] = QCheckBox('Fit?')
+        playout.addWidget(winWidgets['fit_shift'], 1, 2)
+        playout.addWidget(QLabel('Num. Shift\nParams'), 1, 3)
+        winWidgets['n_shift'] = SpinBox(0, [0, 100])
+        playout.addWidget(winWidgets['n_shift'], 1, 4)
+
+        # Offset n params and apriori
+        playout.addWidget(QLabel('Apriori\nOffset'), 2, 0)
+        winWidgets['offset_apriori'] = DSpinBox(0, [-1000, 1000])
+        playout.addWidget(winWidgets['offset_apriori'], 2, 1)
+        winWidgets['fit_offset'] = QCheckBox('Fit?')
+        playout.addWidget(winWidgets['fit_offset'], 2, 2)
+        playout.addWidget(QLabel('Num. Offset\nParams'), 2, 3)
+        winWidgets['n_offset'] = SpinBox(0, [0, 100])
+        playout.addWidget(winWidgets['n_offset'], 2, 4)
 
         # Outputs tab =========================================================
 
@@ -912,16 +938,30 @@ class MainWindow(QMainWindow):
                 )
 
                 # Add background parameters
-                for i, line in enumerate(windowData['bgpolyTable']):
-                    params.add(name=f'bg_poly{i}', value=line[0], vary=line[1])
+                for i in range(windowData['n_bg_poly']):
+                    if i == 0:
+                        value = windowData['bg_poly_apriori']
+                    else:
+                        value = 0
+                    params.add(name=f'bg_poly{i}', value=value)
 
                 # Add shift parameters
-                for i, line in enumerate(windowData['shiftTable']):
-                    params.add(name=f'shift{i}', value=line[0], vary=line[1])
+                for i in range(windowData['n_shift']):
+                    if i == 0:
+                        value = windowData['shift_apriori']
+                    else:
+                        value = 0
+                    params.add(name=f'shift{i}', value=value,
+                               vary=windowData['fit_shift'])
 
                 # Add offset parameters
-                for i, line in enumerate(windowData['offsetTable']):
-                    params.add(name=f'offset{i}', value=line[0], vary=line[1])
+                for i in range(windowData['n_offset']):
+                    if i == 0:
+                        value = windowData['offset_apriori']
+                    else:
+                        value = 0
+                    params.add(name=f'offset{i}', value=value,
+                               vary=windowData['fit_offset'])
 
                 # Add ILS parameters
                 params.add(
@@ -1348,9 +1388,6 @@ class MainWindow(QMainWindow):
         # Pull the main widget data
         config = self.getWidgetData()
 
-        # Set param table keys
-        tableKeys = ['gasTable', 'shiftTable', 'bgpolyTable', 'offsetTable']
-
         # Save the theme
         config['theme'] = self.theme
 
@@ -1364,7 +1401,7 @@ class MainWindow(QMainWindow):
             winConfig = {}
 
             for key in self.windowWidgets[name]:
-                if key in tableKeys:
+                if key == 'gasTable':
                     winConfig[key] = self.windowWidgets[name][key].getData()
                 else:
                     winConfig[key] = self.windowWidgets[name].get(key)
@@ -1399,11 +1436,9 @@ class MainWindow(QMainWindow):
         """Read the config file."""
         if fname is None:
             filter = 'YAML (*.yml *.yaml);;All Files (*)'
-            fname, tfile = QFileDialog.getOpenFileName(self, 'Load Config', '',
-                                                       filter)
-
-        # Set param table keys
-        tableKeys = ['gasTable', 'shiftTable', 'bgpolyTable', 'offsetTable']
+            fname, tfile = QFileDialog.getOpenFileName(
+                self, 'Load Config', '', filter
+            )
 
         # Open the config file
         try:
@@ -1428,9 +1463,11 @@ class MainWindow(QMainWindow):
 
                         for key, val in widgets.items():
 
-                            # Setup the parameter tables
-                            if key in tableKeys:
+                            # Setup the gas parameter table
+                            if key == 'gasTable':
                                 self.windowWidgets[name][key].setData(val)
+
+                            # Set other widgets
                             else:
                                 self.windowWidgets[name].set(key, val)
 
