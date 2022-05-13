@@ -1412,6 +1412,10 @@ class MainWindow(QMainWindow):
 
             logger.info(f'Loading config from {self.config_fname}')
 
+            # Clear current windows
+            for name in list(self.windows):
+                self.remFitWindow(name)
+
             # Apply each config setting
             for label, value in config.items():
 
