@@ -49,7 +49,7 @@ class Signaller(QObject):
 
 
 class QtHandler(logging.Handler):
-    """Handler object for handling logs from QThreads."""
+    """logging Handler object for handling logs from QThreads."""
 
     def __init__(self, slotfunc, *args, **kwargs):
         super(QtHandler, self).__init__(*args, **kwargs)
@@ -68,6 +68,7 @@ class QtHandler(logging.Handler):
 # =============================================================================
 
 class MainWindow(QMainWindow):
+    """Main GUI window."""
 
     # Set log level colors
     LOGCOLORS = {
@@ -93,7 +94,7 @@ class MainWindow(QMainWindow):
     ]
 
     def __init__(self, app, *args, **kwargs):
-        """.Initialise the main window."""
+        """Initialise the main window."""
         super(MainWindow, self).__init__(*args, **kwargs)
         self.app = app
 
@@ -563,7 +564,7 @@ class MainWindow(QMainWindow):
     # =========================================================================
 
     def generateNewWindow(self):
-        """."""
+        """Get a new window name from a popup and add it."""
         # Run new window wizard
         dialog = NewWindowWizard(self)
         if not dialog.exec():
@@ -571,7 +572,7 @@ class MainWindow(QMainWindow):
         self.addFitWindow(**dialog.info)
 
     def addFitWindow(self, name):
-        """."""
+        """Add a new analysis fit window."""
         # Check if the name exists
         if name in self.windows:
             logger.warning(f'{name} window already exists!')
@@ -637,7 +638,7 @@ class MainWindow(QMainWindow):
 
         # Background n params
         playout.addWidget(QLabel('Num. Background\nParams'), 0, 3)
-        winWidgets['n_bg_poly'] = SpinBox(0, [0, 100])
+        winWidgets['n_bg_poly'] = SpinBox(1, [1, 100])
         playout.addWidget(winWidgets['n_bg_poly'], 0, 4)
 
         # Shift n params and apriori
@@ -1874,7 +1875,7 @@ class paramTable(QTableWidget):
         return data
 
     def _resize(self):
-        """."""
+        """Autoscale the table."""
         self.setColumnWidth(0, 60)
         self.setColumnWidth(1, 50)
         if self._type == 'param':
@@ -1889,6 +1890,8 @@ class paramTable(QTableWidget):
 # =============================================================================
 
 class QRightLabel(QLabel):
+    """Right aligned QLabel"""
+
     def __init__(self, label):
         super().__init__(label)
         self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
