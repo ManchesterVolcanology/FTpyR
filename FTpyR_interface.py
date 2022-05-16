@@ -406,8 +406,16 @@ class MainWindow(QMainWindow):
         )
         self.widgets['update_params'].setChecked(False)
 
+        # New row
+        spec_layout.addWidget(QHLine(), 6, 0, 1, 10)
+
+        spec_layout.addWidget(QRightLabel('Output Units:'), 7, 0)
+        self.widgets['output_units'] = QComboBox()
+        self.widgets['output_units'].addItems(['molecules.cm-2', 'ppm.m'])
+        spec_layout.addWidget(self.widgets['output_units'], 7, 1)
+
     def _createLogs(self):
-        """Generate program log widgets."""
+        """Generate program log and control widgets."""
         layout = QGridLayout(self.logFrame)
         layout.setAlignment(Qt.AlignTop)
 
@@ -647,6 +655,7 @@ class MainWindow(QMainWindow):
         playout.addWidget(winWidgets['shift_apriori'], 1, 1)
         winWidgets['fit_shift'] = QCheckBox('Fit?')
         playout.addWidget(winWidgets['fit_shift'], 1, 2)
+        winWidgets['fit_shift'].setChecked(True)
         playout.addWidget(QLabel('Num. Shift\nParams'), 1, 3)
         winWidgets['n_shift'] = SpinBox(0, [0, 100])
         playout.addWidget(winWidgets['n_shift'], 1, 4)
@@ -657,6 +666,7 @@ class MainWindow(QMainWindow):
         playout.addWidget(winWidgets['offset_apriori'], 2, 1)
         winWidgets['fit_offset'] = QCheckBox('Fit?')
         playout.addWidget(winWidgets['fit_offset'], 2, 2)
+        winWidgets['fit_offset'].setChecked(True)
         playout.addWidget(QLabel('Num. Offset\nParams'), 2, 3)
         winWidgets['n_offset'] = SpinBox(0, [0, 100])
         playout.addWidget(winWidgets['n_offset'], 2, 4)
@@ -681,7 +691,7 @@ class MainWindow(QMainWindow):
         winWidgets['target_species'].addItems([''])
         layout.addWidget(winWidgets['target_species'], 0, 1)
         winWidgets['target_species'].currentTextChanged.connect(
-            lambda: self.update_window_plots(name)
+            lambda: self.update_window_results(name)
         )
 
         # Set control for plot options
@@ -693,7 +703,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(winWidgets['plot_os'], 0, 4)
 
         for cb in [winWidgets[k]for k in ['plot_i0', 'plot_bg', 'plot_os']]:
-            cb.stateChanged.connect(lambda: self.update_window_plots(name))
+            cb.stateChanged.connect(lambda: self.update_window_results(name))
 
         # Generate the graph window
         area = da.DockArea()
@@ -890,107 +900,50 @@ class MainWindow(QMainWindow):
     # =========================================================================
 
     def control_loop(self):
-        """Controls initialisation and analysis."""
-        window_params = {}
+        """Run fit window initialisation and launch analysis."""
+        # Create dictionary to hold analysers
         self.analysers = {}
+
+        # Create dicts to hold the workers and read flags for each window
+        self.analysisWorkers = {}
+        self.ready_flags = {}
+
+        # Create flag to signal correct initialisation
+        self.initialisation_error_flag = False
 
         # Pull the widget data
         widgetData = self.getWidgetData()
 
         self.update_status('Initialising')
 
-        # Open main output file
+        # Ensure the output directory exists
+        if not os.path.isdir(widgetData['save_dir']):
+            os.makedirs(widgetData['save_dir'])
+
+        # Generate a log file handler for this analysis loop
+        self.analysis_logger = logging.FileHandler(
+            f'{widgetData["save_dir"]}/ftpyr_analysis.log',
+            mode='w'
+        )
+        log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        date_fmt = '%Y-%m-%d %H:%M:%S'
+        f_format = logging.Formatter(log_fmt, date_fmt)
+        self.analysis_logger.setFormatter(f_format)
+        self.analysis_logger.setLevel(logging.DEBUG)
+        logger.addHandler(self.analysis_logger)
+
+        # Form the output file name
         self.outfname = f"{widgetData['save_dir']}/all_gas_output.csv"
-        with open(self.outfname, 'w') as outfile:
-
-            # Start header line
-            outfile.write('Filename,Timestamp')
-
-            # Generate the initialisation workers
-            for name in self.windows:
-
-                windowData = widgetData['fitWindows'][name]
-
-                if not windowData['run_window']:
-                    continue
-
-                # Setup the parameters
-                params = Parameters()
-
-                # Add gas parameters
-                for line in windowData['gasTable']:
-                    params.add(
-                        name=line[0],
-                        vary=line[1],
-                        species=line[2],
-                        temp=line[3],
-                        pres=line[4],
-                        path=line[5]
-                    )
-
-                    # Add outfile header
-                    outfile.write(
-                        f',{line[0]} ({name}),{line[0]}_err ({name})'
-                    )
-
-                outfile.write(
-                    f',FitQuality ({name}),MaxResidual ({name}),'
-                    f'StdevResidual ({name})'
-                )
-
-                # Add background parameters
-                for i in range(windowData['n_bg_poly']):
-                    if i == 0:
-                        value = windowData['bg_poly_apriori']
-                    else:
-                        value = 0
-                    params.add(name=f'bg_poly{i}', value=value)
-
-                # Add shift parameters
-                for i in range(windowData['n_shift']):
-                    if i == 0:
-                        value = windowData['shift_apriori']
-                    else:
-                        value = 0
-                    params.add(name=f'shift{i}', value=value,
-                               vary=windowData['fit_shift'])
-
-                # Add offset parameters
-                for i in range(windowData['n_offset']):
-                    if i == 0:
-                        value = windowData['offset_apriori']
-                    else:
-                        value = 0
-                    params.add(name=f'offset{i}', value=value,
-                               vary=windowData['fit_offset'])
-
-                # Add ILS parameters
-                params.add(
-                    name='fov',
-                    value=widgetData['fov'],
-                    vary=widgetData['fit_fov']
-                )
-                params.add(
-                    name='opd',
-                    value=widgetData['opd'],
-                    vary=False
-                )
-
-                # Add to the global params dictionary
-                window_params[name] = params
-
-            # Start a new line from the header
-            outfile.write('\n')
 
         # Generate the setup worker
-        setupWorker = SetupWorker(window_params, widgetData)
+        setupWorker = SetupWorker(self.windows, widgetData, self.outfname)
         setupWorker.signals.error.connect(self.update_error)
         setupWorker.signals.initialize.connect(self.initialize_window)
         setupWorker.signals.finished.connect(self.begin_analysis)
         self.threadpool.start(setupWorker)
 
     def initialize_window(self, name, analyser):
-        """Initialize analyser and results table."""
+        """Initialize window analyser and results table."""
         # Add the analyser to the dictionary
         self.analysers[name] = analyser
 
@@ -1007,10 +960,14 @@ class MainWindow(QMainWindow):
 
     def begin_analysis(self):
         """Run main analysis loop."""
+        # Check initialisation went ok
+        if self.initialisation_error_flag:
+            logger.info('Error with window initialisation')
+            return
+        logger.info('All windows initialised, begining analysis loop')
+
         # Pull the widget data
         widgetData = self.getWidgetData()
-        self.analysisWorkers = {}
-        self.ready_flags = {}
 
         # Get the spectra to analyse
         self.spectra_list = widgetData['spec_fnames'].split('\n')
@@ -1018,6 +975,9 @@ class MainWindow(QMainWindow):
 
         # Create dictionary to hold fit results
         self.fit_results = {}
+
+        # Get the output ppmm flag and disable the option
+        self.output_ppmm_flag = widgetData['output_units'] == 'ppm.m'
 
         self.update_status('Analysing')
 
@@ -1050,6 +1010,7 @@ class MainWindow(QMainWindow):
         """Stop analysis."""
         for name, worker in self.analysisWorkers.items():
             worker.stop()
+        logger.debug('Analysis stopped')
         self.analysis_complete()
 
     def pause_analysis(self):
@@ -1060,8 +1021,10 @@ class MainWindow(QMainWindow):
 
         # Update button label
         if self.pause_btn.text() == 'Pause':
+            logger.debug('Analysis continued')
             self.pause_btn.setText('Continue')
         else:
+            logger.debug('Analysis paused')
             self.pause_btn.setText('Pause')
 
     @Slot(tuple)
@@ -1074,7 +1037,7 @@ class MainWindow(QMainWindow):
         self.fit_results[name] = fit
 
         if fit is not None:
-            self.update_window_plots(name)
+            self.update_window_results(name)
 
         # Update worker ready flag
         self.ready_flags[name] = True
@@ -1114,39 +1077,33 @@ class MainWindow(QMainWindow):
 
     def set_next_spectrum(self):
         """Set next spectrum to analyse."""
+        # Construct the spectrum file name
         self.spec_filename = self.spectra_list[self.spectrum_counter]
+        logger.debug(f'Sending {self.spec_filename} for analysis')
+
+        # Read in the spectrum and send to the workers
         self.spectrum = read_spectrum(self.spec_filename)
+        self.send_spectrum(self.spectrum)
+
+        # Update the progress
         self.progress.setValue(
             (self.spectrum_counter+1) / len(self.spectra_list) * 100
         )
-        self.send_spectrum(self.spectrum)
         self.spectrum_counter += 1
+
+        # Update the results plots
         self.update_main_plots()
         self.update_ratio_plot()
 
-    def analysis_complete(self):
-        """Signal for end of analysis."""
-        # Renable the start button
-        self.start_btn.setEnabled(True)
-        self.pause_btn.setEnabled(False)
-        self.stop_btn.setEnabled(False)
-        self.pause_btn.setText('Pause')
-
-        # Set the status bar
-        self.update_status('Ready')
-
-        # Log end of analysis
-        logger.info('Analysis finished')
-
     def update_main_plots(self):
-        """."""
+        """Update the main spectrum graph."""
         # Get the spectrum x and y data
         x = self.spectrum.coords['Wavenumber'].to_numpy()
         y = self.spectrum.to_numpy()
         self.plot_lines['main'][0].setData(x, y)
 
-    def update_window_plots(self, name):
-        """."""
+    def update_window_results(self, name):
+        """Update the window results graphs and table."""
         try:
             # Pull the window results
             fit = self.fit_results[name]
@@ -1188,12 +1145,18 @@ class MainWindow(QMainWindow):
 
         # Update results table
         for i, p in enumerate(fit.params.values()):
-            self.results_tables[name].setItem(
-                i, 2, QTableWidgetItem(str(p.fit_val))
-            )
-            self.results_tables[name].setItem(
-                i, 3, QTableWidgetItem(str(p.fit_err))
-            )
+
+            # Check if gases require conversion to ppm.m
+            if p.species is not None and self.output_ppmm_flag:
+                val = p.fit_val_to_ppmm()
+                err = p.fit_err_to_ppmm()
+            else:
+                val = p.fit_val
+                err = p.fit_err
+
+            # Update the table
+            self.results_tables[name].setItem(i, 2, QTableWidgetItem(str(val)))
+            self.results_tables[name].setItem(i, 3, QTableWidgetItem(str(err)))
 
     def update_ratio_plot(self):
         """Update the data shown on the ratio plot."""
@@ -1297,12 +1260,30 @@ class MainWindow(QMainWindow):
     def update_error(self, error):
         """Update error messages from the worker."""
         exctype, value, trace = error
-        logger.warning(f'Uncaught exception!\n{trace}')
+        logger.error(f'Uncaught exception!\n{trace}')
+        self.initialisation_error_flag = True
         self.stop_analysis()
 
     def update_status(self, status):
         """Update status bar."""
         self.statusBar().showMessage(status)
+
+    def analysis_complete(self):
+        """Signal for end of analysis."""
+        # Renable the start button
+        self.start_btn.setEnabled(True)
+        self.pause_btn.setEnabled(False)
+        self.stop_btn.setEnabled(False)
+        self.pause_btn.setText('Pause')
+
+        # Set the status bar
+        self.update_status('Ready')
+
+        # Log end of analysis
+        logger.info('Analysis finished')
+
+        # Turn off the logger
+        logger.removeHandler(self.analysis_logger)
 
     # =========================================================================
     # Program Global Slots
@@ -1362,9 +1343,6 @@ class MainWindow(QMainWindow):
         """Get the widget data into a single dictionary."""
         widgetData = {}
 
-        # Set param table keys
-        tableKeys = ['gasTable', 'shiftTable', 'bgpolyTable', 'offsetTable']
-
         # Save the main gui widgets
         for label in self.widgets:
             widgetData[label] = self.widgets.get(label)
@@ -1375,7 +1353,7 @@ class MainWindow(QMainWindow):
             winConfig = {}
 
             for key in self.windowWidgets[name]:
-                if key in tableKeys:
+                if key == 'gasTable':
                     winConfig[key] = self.windowWidgets[name][key].getData()
                 else:
                     winConfig[key] = self.windowWidgets[name].get(key)
@@ -1490,7 +1468,7 @@ class MainWindow(QMainWindow):
         return config
 
     def changeTheme(self):
-        """Change the theme."""
+        """Change the theme between light and dark."""
         if self.theme == 'Light':
             # Set overall style
             self.app.setStyleSheet(qdarktheme.load_stylesheet())
@@ -1523,7 +1501,7 @@ class MainWindow(QMainWindow):
 # =============================================================================
 
 class WorkerSignals(QObject):
-    """."""
+    """Signals for Worker classes to communicate with the main thread."""
     results = Signal(tuple)
     finished = Signal()
     error = Signal(tuple)
@@ -1531,20 +1509,21 @@ class WorkerSignals(QObject):
 
 
 class SetupWorker(QRunnable):
-    """."""
+    """Worker class to handle analyser setup in a seperate thread."""
 
-    def __init__(self, window_params, widgetData, *args, **kwargs):
-        """."""
+    def __init__(self, windows, widgetData, outfname, *args, **kwargs):
+        """Initialise."""
         super(SetupWorker, self).__init__()
         self.args = args
         self.kwargs = kwargs
         self.signals = WorkerSignals()
-        self.window_params = window_params
+        self.windows = windows
         self.widgetData = widgetData
+        self.outfname = outfname
 
     @Slot()
     def run(self):
-        """."""
+        """Worker run function."""
         try:
             self.fn(*self.args, **self.kwargs)
         except Exception:
@@ -1555,40 +1534,123 @@ class SetupWorker(QRunnable):
 
     def fn(self):
         """Main setup loop."""
-        # Loop through windows
-        for name, params in self.window_params.items():
+        # Open main output file
+        with open(self.outfname, 'w') as main_outfile:
 
-            # Pull the window data
-            windowData = self.widgetData['fitWindows'][name]
+            # Start header line
+            main_outfile.write('Filename,Timestamp')
 
-            # Generate the analyser function
-            logger.info(f'Generating analyser for {name} window')
-            self.analyser = Analyser(
-                params=params,
-                rfm_path=self.widgetData['rfm_path'],
-                hitran_path=self.widgetData['hitran_path'],
-                wn_start=windowData['wn_start'],
-                wn_stop=windowData['wn_stop'],
-                zero_fill_factor=self.widgetData['zero_fill_factor'],
-                solar_flag=self.widgetData['solar_flag'],
-                obs_height=self.widgetData['obs_height'],
-                update_params=self.widgetData['update_params'],
-                residual_limit=self.widgetData['residual_limit'],
-                npts_per_cm=50,
-                apod_function=self.widgetData['apod_function'],
-                outfile=f"{self.widgetData['save_dir']}/{name}_output.csv"
-            )
+            # Generate the initialisation workers
+            for name in self.windows:
 
-            self.signals.initialize.emit(name, self.analyser)
+                windowData = self.widgetData['fitWindows'][name]
 
-        logger.info('All windows initialised')
+                if not windowData['run_window']:
+                    continue
+
+                # Setup the parameters
+                params = Parameters()
+
+                # Add gas parameters
+                for line in windowData['gasTable']:
+                    params.add(
+                        name=line[0],
+                        vary=line[1],
+                        species=line[2],
+                        temp=line[3],
+                        pres=line[4],
+                        path=line[5]
+                    )
+
+                    # Add outfile header
+                    main_outfile.write(
+                        f',{line[0]} ({name}),{line[0]}_err ({name})'
+                    )
+
+                main_outfile.write(
+                    f',FitQuality ({name}),MaxResidual ({name}),'
+                    f'StdevResidual ({name})'
+                )
+
+                # Add background parameters
+                for i in range(windowData['n_bg_poly']):
+                    if i == 0:
+                        value = windowData['bg_poly_apriori']
+                    else:
+                        value = 0
+                    params.add(name=f'bg_poly{i}', value=value)
+
+                # Add shift parameters
+                for i in range(windowData['n_shift']):
+                    if i == 0:
+                        value = windowData['shift_apriori']
+                    else:
+                        value = 0
+                    params.add(name=f'shift{i}', value=value,
+                               vary=windowData['fit_shift'])
+
+                # Add offset parameters
+                for i in range(windowData['n_offset']):
+                    if i == 0:
+                        value = windowData['offset_apriori']
+                    else:
+                        value = 0
+                    params.add(name=f'offset{i}', value=value,
+                               vary=windowData['fit_offset'])
+
+                # Add ILS parameters
+                params.add(
+                    name='fov',
+                    value=self.widgetData['fov'],
+                    vary=self.widgetData['fit_fov']
+                )
+                params.add(
+                    name='opd',
+                    value=self.widgetData['opd'],
+                    vary=False
+                )
+
+                # Setup analyser settings
+                logger.info(f'Generating analyser for {name} window')
+                outfile = f"{self.widgetData['save_dir']}/{name}_output.csv"
+                output_ppmm_flag = self.widgetData['output_units'] == 'ppm.m'
+                analyser_settings = {
+                    'params': params,
+                    'rfm_path': self.widgetData['rfm_path'],
+                    'hitran_path': self.widgetData['hitran_path'],
+                    'wn_start': windowData['wn_start'],
+                    'wn_stop': windowData['wn_stop'],
+                    'zero_fill_factor': self.widgetData['zero_fill_factor'],
+                    'solar_flag': self.widgetData['solar_flag'],
+                    'obs_height': self.widgetData['obs_height'],
+                    'update_params': self.widgetData['update_params'],
+                    'residual_limit': self.widgetData['residual_limit'],
+                    'npts_per_cm': 100,
+                    'apod_function': self.widgetData['apod_function'],
+                    'outfile': outfile,
+                    'output_ppmm_flag': output_ppmm_flag
+                }
+
+                # Log analyser settings
+                logger.debug('Analyser settings:')
+                for key, value in analyser_settings.items():
+                    logger.debug(f'{key}: {value}')
+
+                # Generate the analyser function
+                self.analyser = Analyser(**analyser_settings)
+
+                # Setup the window in the front end
+                self.signals.initialize.emit(name, self.analyser)
+
+            # Start a new line from the header
+            main_outfile.write('\n')
 
 
 class AnalysisWorker(QRunnable):
-    """."""
+    """Worker class to handle spectra analysis in a separate thread."""
 
     def __init__(self, name, analyser, *args, **kwargs):
-        """."""
+        """Initialise."""
         super(AnalysisWorker, self).__init__()
         self.name = name
         self.args = args
@@ -1602,9 +1664,9 @@ class AnalysisWorker(QRunnable):
 
     @Slot()
     def run(self):
-        """."""
+        """Worker run function."""
         try:
-            self.fn(self.name, *self.args, **self.kwargs)
+            self.fn(*self.args, **self.kwargs)
         except Exception:
             traceback.print_exc()
             exctype, value = sys.exc_info()[:2]
@@ -1612,25 +1674,28 @@ class AnalysisWorker(QRunnable):
             self.signals.error.emit((exctype, value, traceback.format_exc()))
         logger.info(f'{self.name} analyser finished')
 
-    def fn(self, name):
+    def fn(self):
         """Main analysis loop."""
         while not self.isStopped:
             if self.spectrum is not None and not self.isPaused:
                 fit = self.analyser.fit(self.spectrum)
                 self.spectrum = None
-                self.signals.results.emit([name, fit])
+                self.signals.results.emit([self.name, fit])
             else:
                 time.sleep(0.001)
 
     def pause(self):
         """Pause the analysis."""
         if self.isPaused:
+            logger.debug(f'{self.name} analyser played')
             self.isPaused = False
         else:
+            logger.debug(f'{self.name} analyser paused')
             self.isPaused = True
 
     def stop(self):
         """Stop the analysis."""
+        logger.debug(f'{self.name} analyser stopped')
         self.isStopped = True
 
 
