@@ -370,17 +370,27 @@ class MainWindow(QMainWindow):
         self.widgets['opd'] = DSpinBox(1.6, [0, 100], 0.01)
         spec_layout.addWidget(self.widgets['opd'], 1, 3)
 
+        # Input for model grid spacing
+        spec_layout.addWidget(QRightLabel('Model Points\nper cm'), 2, 0)
+        self.widgets['model_pts_per_cm'] = SpinBox(100, [0, 1e8])
+        spec_layout.addWidget(self.widgets['model_pts_per_cm'], 2, 1)
+
+        # Input for model grid padding
+        spec_layout.addWidget(QRightLabel('Model Grid\npadding (cm-1)'), 2, 2)
+        self.widgets['model_padding'] = SpinBox(10, [0, 1e4])
+        spec_layout.addWidget(self.widgets['model_padding'], 2, 3)
+
         # New row
-        spec_layout.addWidget(QHLine(), 2, 0, 1, 10)
+        spec_layout.addWidget(QHLine(), 3, 0, 1, 10)
 
         # Add control for updating parameters
         self.widgets['solar_flag'] = QCheckBox('Solar\nOccultation')
-        spec_layout.addWidget(self.widgets['solar_flag'], 3, 0)
+        spec_layout.addWidget(self.widgets['solar_flag'], 4, 0)
 
         # Add control for maximum residual
-        spec_layout.addWidget(QRightLabel('Observation\nHeight (m)'), 3, 1)
+        spec_layout.addWidget(QRightLabel('Observation\nHeight (m)'), 4, 1)
         self.widgets['obs_height'] = DSpinBox(0, [0, 100000], 0.1)
-        spec_layout.addWidget(self.widgets['obs_height'], 3, 2)
+        spec_layout.addWidget(self.widgets['obs_height'], 4, 2)
         self.widgets['solar_flag'].stateChanged.connect(
             lambda: self.widgets['obs_height'].setDisabled(
                 not self.widgets['solar_flag'].isChecked()
@@ -389,16 +399,16 @@ class MainWindow(QMainWindow):
         self.widgets['solar_flag'].setChecked(False)
 
         # New row
-        spec_layout.addWidget(QHLine(), 4, 0, 1, 10)
+        spec_layout.addWidget(QHLine(), 5, 0, 1, 10)
 
         # Add control for updating parameters
         self.widgets['update_params'] = QCheckBox('Update Fit\nParameters?')
-        spec_layout.addWidget(self.widgets['update_params'], 5, 0)
+        spec_layout.addWidget(self.widgets['update_params'], 6, 0)
 
         # Add control for maximum residual
-        spec_layout.addWidget(QRightLabel('Good Fit\nResidual Limit'), 5, 1)
+        spec_layout.addWidget(QRightLabel('Good Fit\nResidual Limit'), 6, 1)
         self.widgets['residual_limit'] = DSpinBox(10, [0, 1000], 0.1)
-        spec_layout.addWidget(self.widgets['residual_limit'], 5, 2)
+        spec_layout.addWidget(self.widgets['residual_limit'], 6, 2)
         self.widgets['update_params'].stateChanged.connect(
             lambda: self.widgets['residual_limit'].setDisabled(
                 not self.widgets['update_params'].isChecked()
@@ -407,12 +417,12 @@ class MainWindow(QMainWindow):
         self.widgets['update_params'].setChecked(False)
 
         # New row
-        spec_layout.addWidget(QHLine(), 6, 0, 1, 10)
+        spec_layout.addWidget(QHLine(), 7, 0, 1, 10)
 
-        spec_layout.addWidget(QRightLabel('Output Units:'), 7, 0)
+        spec_layout.addWidget(QRightLabel('Output Units:'), 8, 0)
         self.widgets['output_units'] = QComboBox()
         self.widgets['output_units'].addItems(['molecules.cm-2', 'ppm.m'])
-        spec_layout.addWidget(self.widgets['output_units'], 7, 1)
+        spec_layout.addWidget(self.widgets['output_units'], 8, 1)
 
     def _createLogs(self):
         """Generate program log and control widgets."""
@@ -1625,7 +1635,8 @@ class SetupWorker(QRunnable):
                     'obs_height': self.widgetData['obs_height'],
                     'update_params': self.widgetData['update_params'],
                     'residual_limit': self.widgetData['residual_limit'],
-                    'npts_per_cm': 100,
+                    'model_pts_per_cm': self.widgetData['model_pts_per_cm'],
+                    'model_padding': self.widgetData['model_padding'],
                     'apod_function': self.widgetData['apod_function'],
                     'outfile': outfile,
                     'output_ppmm_flag': output_ppmm_flag
