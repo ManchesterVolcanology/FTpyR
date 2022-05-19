@@ -413,17 +413,17 @@ class Analyser(object):
 
         return interp_spec
 
-    def _make_ils(self, optical_path_diff, fov, apod_function='NB_medium'):
+    def _make_ils_old(self, optical_path_diff, fov, apod_function='NB_medium'):
         """Generate the ILS to use in the fit."""
         # Define the total optical path difference as the sampling frequency
-        total_opd = self.npts_per_cm
+        total_opd = self.model_pts_per_cm
 
         # Convert fov from milliradians to radians
         fov = fov / 1000
 
         # Define the total number of points in the ftir igm
-        total_igm_npts = int(total_opd * self.npts_per_cm)
-        ftir_igm_npts = int(optical_path_diff * self.npts_per_cm)
+        total_igm_npts = int(total_opd * self.model_pts_per_cm)
+        ftir_igm_npts = int(optical_path_diff * self.model_pts_per_cm)
         filler_igm_npts = int(total_igm_npts - ftir_igm_npts)
 
         # Calculate the FTIR IGM grid
@@ -471,14 +471,14 @@ class Analyser(object):
         spc = np.concatenate([spc2, spc1])
 
         # Remove the offset
-        spc = spc - np.mean(spc)
+        spc = spc - np.min(spc)
 
         # Apply the FOV affect, like a boxcar in freq space with
         # width = wavenumber * (1 - cos(fov / 2))
         fov_width = self.wn_start * (1 - np.cos(fov / 2))
 
         # Calculate the smoothing factor in number of points
-        fov_smooth_factor = int(self.npts_per_cm * fov_width)
+        fov_smooth_factor = int(self.model_pts_per_cm * fov_width)
 
         # Catch bad smooth factors
         if fov_smooth_factor <= 0 or fov_smooth_factor > n2:
@@ -489,13 +489,53 @@ class Analyser(object):
         spc_fov = np.convolve(spc, w, mode='same')
 
         # Select the middle, +/- 5 wavenumbers and normalise
-        k_size = 5 * self.npts_per_cm
+        k_size = 5 * self.model_pts_per_cm
         kernel = spc_fov[n2-k_size:n2+k_size]
         norm_kernel = kernel/np.nansum(kernel)
 
         self.ils = norm_kernel
 
         return norm_kernel
+
+    def _make_ils(self, opd, fov, apod_function='NB_medium'):
+        """."""
+        # Make a the apodisation function grid 10 cm-1 wide
+        npts = 20*self.model_pts_per_cm + 1
+        grid = np.linspace(-10, 10, npts)
+
+        # Pull the apodisation parameters
+        c_params = self.apod_param_dict[apod_function]
+
+        # Compute the apodisation function
+        apod = np.sum(
+            [c * ((1 - (grid / opd)**2))**i for i, c in enumerate(c_params)],
+            axis=0
+        )
+
+        # Apply fourier transform to frequency space
+        apod_func = fft.ifft(apod).real
+
+        # Mirror around 0
+        n = npts // 2
+        apod_func = np.concatenate([apod_func[n:], apod_func[:n]])
+
+        # Apply the FOV affect, like a boxcar in freq space with
+        # width = wavenumber * (1 - cos(fov / 2))
+        av_wn = (self.wn_stop + self.wn_start) / 2
+        fov_width = av_wn * (1 - np.cos(fov/1000 / 2))
+
+        # Compute the fov boxhat function
+        fov_box = np.zeros(npts)
+        fov_box[np.abs(grid) < fov_width] = 1
+
+        ils = np.convolve(apod_func, fov_box, mode='same')
+
+        # Normalise the ILS
+        norm_ils = np.divide(ils, np.sum(ils))
+
+        self.ils = norm_ils
+
+        return norm_ils
 
 
 def zero_fill(spectrum, zero_fill_factor):
