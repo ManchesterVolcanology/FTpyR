@@ -51,7 +51,7 @@ class Analyser(object):
         residual greater than residual_limit will have a fit_quality=2 and will
         not be used as the next first guess (if update_params==True). Default
         is 10.
-    wn_pad : float, optional
+    model_padding : float, optional
         The amount of padding of the fit window, in cm-1, to avoid convolution
         edge effects and allow a wavenumber shift. Default is 50.
     zero_fill_factor : int, optional
@@ -59,7 +59,7 @@ class Analyser(object):
         to artificially increase the sampling frequency. Increasing numbers
         use increassing zero-filling, determined by the next_fast_len function
         of the scipy.fft library. Default is 0.
-    npts_per_cm : int, optional
+    model_pts_per_cm : int, optional
         The number of points per cm-1 to use in the model wavenumber grid.
         Default is 100.
     apod_function : str, optional
@@ -75,6 +75,13 @@ class Analyser(object):
         either subtract or divide. Default is subtract.
     bg_spectrum : xarray.DataArray, optional
         The spectrum to use in the background correction. Default is None.
+    output_ppmm_flag : bool, optional
+        If True then the output gas values are converted to ppm.m from
+        molecules/cm2. Default is False.
+    gas_auto_apriori : bool, optional
+        If True, then the apriori values for gas species are set to the column
+        amount calculate in RFM (assuming provided path length) or to zero if
+        Parameter.vary=False. Default is True.
 
     Methods
     -------
@@ -85,12 +92,20 @@ class Analyser(object):
         The forward model used to fit spectra
     """
 
+    # Define apodisation parameters depending on the function
+    apod_param_dict = {
+        'boxcar':     [1.0,       0.0,      0.0,      0.0],
+        'NB_weak':    [0.348093, -0.087577, 0.703484, 0.0],
+        'NB_medium':  [0.152442, -0.136176, 0.983734, 0.0],
+        'NB_strong':  [0.045335,  0.0,      0.554883, 0.399782]
+    }
+
     def __init__(self, params, rfm_path, hitran_path, wn_start, wn_stop,
                  solar_flag=False, obs_height=0.0, update_params=True,
-                 residual_limit=10, wn_pad=50, zero_fill_factor=0,
-                 npts_per_cm=100, apod_function='NB_medium', outfile=None,
+                 residual_limit=10, zero_fill_factor=0, model_padding=50,
+                 model_pts_per_cm=100, apod_function='NB_medium', outfile=None,
                  tolerance=0.001, bg_behaviour='subtract', bg_spectrum=None,
-                 gas_units='molecules.cm-2'):
+                 output_ppmm_flag=False, gas_auto_apriori=True):
         """Initialise the Analyser."""
         # Generate the RFM object
         logger.debug('Setting up RFM')
@@ -99,14 +114,22 @@ class Analyser(object):
             hitran_path=hitran_path,
             wn_start=wn_start,
             wn_stop=wn_stop,
-            wn_pad=wn_pad,
+            model_padding=model_padding,
             solar_flag=solar_flag,
             obs_height=obs_height,
-            npts_per_cm=npts_per_cm
+            model_pts_per_cm=model_pts_per_cm
         )
 
         # Calculate the optical depths
         self.params = self.rfm.calc_optical_depths(params=params)
+
+        # If using the gas apriori, update the parameters
+        if gas_auto_apriori:
+            for gas, par in self.params.items():
+                if par.species is not None and par.vary:
+                    self.params[gas].value = par.original_amt
+                elif par.species is not None and not par.vary:
+                    self.params[gas].value = 0
 
         # Pull the fitted parameters
         self.p0 = self.params.fittedvalueslist()
@@ -114,7 +137,7 @@ class Analyser(object):
         # Store the fit window information
         self.wn_start = float(wn_start)
         self.wn_stop = float(wn_stop)
-        self.npts_per_cm = int(npts_per_cm)
+        self.model_pts_per_cm = int(model_pts_per_cm)
 
         # Store the quality check settings
         self.update_params = update_params
@@ -123,6 +146,13 @@ class Analyser(object):
 
         # Add zero fill factor
         self.zero_fill_factor = zero_fill_factor
+
+        # Add the output units
+        self.output_ppmm_flag = output_ppmm_flag
+        if self.output_ppmm_flag:
+            gas_units = 'ppm.m'
+        else:
+            gas_units = 'molecules.cm-2'
 
         # Process the background spectrum
         self.bg_behaviour = bg_behaviour
@@ -135,11 +165,11 @@ class Analyser(object):
 
         # Calculate the model x-grid
         # This includes a 1 cm-1 padding on either side to allow shifts
-        npts_cm = int(self.wn_stop - self.wn_start) + wn_pad*2
-        self.xgrid_npts = self.npts_per_cm*(npts_cm) + 1
+        npts_cm = int(self.wn_stop - self.wn_start) + model_padding*2
+        self.xgrid_npts = self.model_pts_per_cm*(npts_cm) + 1
         self.model_grid = np.linspace(
-            self.wn_start-wn_pad,
-            self.wn_stop+wn_pad,
+            self.wn_start-model_padding,
+            self.wn_stop+model_padding,
             self.xgrid_npts
         )
 
@@ -170,8 +200,8 @@ class Analyser(object):
                     f'#,FTpyR Output file: {outfile}\n'
                     f'#,StartWavenumber(cm-1),{wn_start}\n'
                     f'#,StopWavenumber(cm-1),{wn_stop}\n'
-                    f'#,WavenumberPadding(cm-1),{wn_pad}\n'
-                    f'#,PointsPercm,{npts_per_cm}\n'
+                    f'#,WavenumberPadding(cm-1),{model_padding}\n'
+                    f'#,PointsPercm,{model_pts_per_cm}\n'
                     f'#,ZeroFillFactor,{zero_fill_factor}\n'
                     f'#,SolarFlag,{solar_flag}\n'
                     f'#,ObserverHeight(m),{obs_height}\n'
@@ -180,7 +210,7 @@ class Analyser(object):
                     f'#,Apodisation,{apod_function}\n'
                     f'#,RFM,{rfm_path}\n'
                     f'#,HITRAN,{hitran_path}\n'
-                    f'#,GasUnits,{gas_units}\n'
+                    f'#,GasOutputUnits,{gas_units}\n'
                     '#,Name,Gas,Temperature(K),Pressure(mb),PathLength(m)\n'
                 )
 
@@ -289,9 +319,19 @@ class Analyser(object):
 
                 # Write the fitted values
                 for p in self.params.values():
-                    ofile.write(f',{p.fit_val},{p.fit_err}')
 
-                # New line
+                    # Check if gases require conversion to ppm.m
+                    if p.species is not None and self.output_ppmm_flag:
+                        val = p.fit_val_to_ppmm()
+                        err = p.fit_err_to_ppmm()
+                    else:
+                        val = p.fit_val
+                        err = p.fit_err
+
+                    # Write the fit value and error
+                    ofile.write(f',{val},{err}')
+
+                # Add fit quality info and start a new line
                 ofile.write(
                     f',{fit.nerr},{fit.max_residual},{fit.std_residual}\n'
                 )
