@@ -547,11 +547,11 @@ def zero_fill(spectrum, zero_fill_factor):
     # Calculate fast_npts, the first 2^x after npts
     target_npts = fft.next_fast_len(len(spec)) * zero_fill_factor
 
-    # FFT the spectrum to time domain
-    time_spec = fft.rfft(spec)
+    # FFT the spectrum to space domain
+    space_spec = fft.rfft(spec)
 
-    # Re-FFT the time spectrum back to frequency space, padding with zeros
-    filled_spec = fft.irfft(time_spec, target_npts)
+    # Re-FFT the space spectrum back to frequency space, padding with zeros
+    filled_spec = fft.irfft(space_spec, target_npts)
 
     # Compute the new grid
     filled_grid = np.linspace(grid[0], grid[-1], target_npts)
@@ -730,7 +730,10 @@ class FitResult(object):
                           method='cubic')
 
         # Calculate the parameter od
-        par_od = np.multiply(params[par_name].xsec_od, p[par_name])
+        par_od = np.multiply(
+            self.params[par_name].xsec_od,
+            self.params[par_name].fit_val
+        )
 
         par_T = np.exp(-par_od)
 
