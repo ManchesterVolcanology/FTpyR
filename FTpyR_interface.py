@@ -1803,7 +1803,9 @@ class Widgets(dict):
                 self[key].setCurrentIndex(index)
         elif type(self[key]) == QCheckBox:
             self[key].setChecked(value)
-        elif type(self[key]) in [QSpinBox, QDoubleSpinBox, SpinBox, DSpinBox]:
+        elif type(self[key]) in [QSpinBox, SpinBox]:
+            self[key].setValue(int(value))
+        elif type(self[key]) in [QDoubleSpinBox, DSpinBox]:
             self[key].setValue(float(value))
         else:
             raise ValueError('Widget type not recognised!')
