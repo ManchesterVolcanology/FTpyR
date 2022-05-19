@@ -200,3 +200,24 @@ class Parameter(object):
 
         self.fit_val = np.nan
         self.fit_err = np.nan
+
+    def value_to_ppmm(self):
+        """Return the initial value in ppm.m."""
+        if self.species is not None:
+            return self.value * self.temp / (7.243e14 * self.pres)
+        else:
+            logger.warning(f'{self.name} parameter is not a gas!')
+
+    def fit_val_to_ppmm(self):
+        """Return the fit value in ppm.m."""
+        if self.species is not None:
+            return self.fit_val * self.temp / (7.243e14 * self.pres)
+        else:
+            logger.warning(f'{self.name} parameter is not a gas!')
+
+    def fit_err_to_ppmm(self):
+        """Return the fit error in ppm.m."""
+        if self.species is not None:
+            return self.fit_err * self.temp / (7.243e14 * self.pres)
+        else:
+            logger.warning(f'{self.name} parameter is not a gas!')
