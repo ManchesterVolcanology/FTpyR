@@ -32,7 +32,7 @@ class RFM(object):
         The start wavenumber of the fit window in cm-1
     wn_stop : float
         The end wavenumber of the fit window in cm-1
-    wn_pad : float, optional
+    model_padding : float, optional
         The padding of the fit window in cm-1. Default is 50cm-1
     solar_flag : bool, optional
         If True, then calculation is perfromed using a full atmosphere.
@@ -40,7 +40,7 @@ class RFM(object):
     obs_height : float, optional
         The altitude of the instrument in meters above sea level, used if
         solar_flag is True. Default is None
-    npts_per_cm : int, optional
+    model_pts_per_cm : int, optional
         The number of points per cm-1 in the forward model. Default is 100
 
     Methods
@@ -49,8 +49,9 @@ class RFM(object):
         Calculate the gas optical depths using the RFM executable.
     """
 
-    def __init__(self, exe_path, hitran_path, wn_start, wn_stop, wn_pad=50,
-                 solar_flag=False, obs_height=0.0, npts_per_cm=100):
+    def __init__(self, exe_path, hitran_path, wn_start, wn_stop,
+                 model_padding=50, solar_flag=False, obs_height=0.0,
+                 model_pts_per_cm=100):
         """."""
         # Assign object variables =============================================
         self.exe_path = str(exe_path)
@@ -58,9 +59,9 @@ class RFM(object):
         self.hitran_path = str(hitran_path)
         self.wn_start = float(wn_start)
         self.wn_stop = float(wn_stop)
-        self.wn_pad = float(wn_pad)
+        self.model_padding = float(model_padding)
         self.solar_flag = bool(solar_flag)
-        self.npts_per_cm = int(npts_per_cm)
+        self.model_pts_per_cm = int(model_pts_per_cm)
         self.obs_height = float(obs_height)
 
         # Perform input checks ================================================
@@ -101,12 +102,12 @@ class RFM(object):
         for i, [name, gas] in enumerate(gas_params.items()):
 
             # Form cache filename
-            wn_lo_limit = self.wn_start - self.wn_pad
-            wn_hi_limit = self.wn_stop + self.wn_pad
+            wn_lo_limit = self.wn_start - self.model_padding
+            wn_hi_limit = self.wn_stop + self.model_padding
             fname = f'{gas.species}_' \
                     f'{wn_lo_limit:.1f}_{wn_hi_limit:.1f}_' \
                     f'{gas.pres:.1f}_{gas.temp:.1f}_{gas.path}_' \
-                    f'{self.npts_per_cm}'
+                    f'{self.model_pts_per_cm}'
             fname = fname.replace('.', 'p') + '.nc'
 
             # Generate a flag to control if the calculation is run or not
@@ -182,7 +183,6 @@ class RFM(object):
 
             # Set the optical depth and path_amt for the gas parameter
             params[gas.name].original_od = od
-            params[gas.name].value = path_amt
             params[gas.name].original_amt = path_amt
             params[gas.name].xsec_od = od / path_amt
 
@@ -229,9 +229,9 @@ class RFM(object):
 
             # Write grid details: start wavenumber, stop wavenumber and number
             # of points/cm-1
-            rfmdrv.write(f'*SPC\n{self.wn_start - self.wn_pad} '
-                         f'{self.wn_stop + self.wn_pad} '
-                         f'{self.npts_per_cm}\n')
+            rfmdrv.write(f'*SPC\n{self.wn_start - self.model_padding} '
+                         f'{self.wn_stop + self.model_padding} '
+                         f'{self.model_pts_per_cm}\n')
 
             # Write gas name
             rfmdrv.write(f'*GAS\n{gas.species}\n')
@@ -295,8 +295,15 @@ class RFM(object):
             fname = f'{self.wd}/rfm.out'
 
         # Read in the main RFM output file
-        with open(fname, 'r') as rfm_out:
-            lines = rfm_out.readlines()
+        try:
+            with open(fname, 'r') as rfm_out:
+                lines = rfm_out.readlines()
+        except FileNotFoundError:
+            logger.error(
+                'RFM path output missing! The RFM did not run. '
+                f'Please check RFM output log: {self.wd}/rfm.log'
+            )
+            raise
 
         # First three lines are the header, followed by the file info which
         # contains the number of points, start wavenumber, wavenumber step,
