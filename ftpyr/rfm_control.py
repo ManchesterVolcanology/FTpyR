@@ -327,6 +327,9 @@ class RFM(object):
             [float(item) for sublist in line_data for item in sublist]
         )
 
+        # Remove the file to avoid reading the wrong one by mistake
+        os.remove(fname)
+
         return wn_grid, data
 
     def _read_path_output(self, gas, fname=None):
@@ -337,8 +340,15 @@ class RFM(object):
             fname = f'{self.wd}/rfm_pth.out'
 
         # Read in the file
-        with open(fname, 'r') as path_out:
-            lines = [line.strip() for line in path_out.readlines()]
+        try:
+            with open(fname, 'r') as path_out:
+                lines = [line.strip() for line in path_out.readlines()]
+        except FileNotFoundError:
+            logger.error(
+                'RFM path output missing! The RFM did not run. '
+                f'Please check RFM output log: {self.wd}/rfm.log'
+            )
+            raise
 
         # The first two lines are the header info, followed by info on the
         # number of gases and number of segments
@@ -361,9 +371,12 @@ class RFM(object):
 
         # Check the gas name is the one expected
         if gas_name.upper() != gas.upper():
-            logger.error(
+            logger.exception(
                 f'RFM output gas {gas_name.upper()} does not match requested '
-                + f'{gas}!'
+                + f'{gas}! Please check RFM output log: {self.wd}/rfm.log'
             )
+
+        # Remove the file to avoid reading the wrong one by mistake
+        os.remove(fname)
 
         return path_amt
