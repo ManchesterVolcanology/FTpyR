@@ -264,6 +264,8 @@ class RFM(object):
             vmr = yaml.load(ymlfile, Loader=yaml.FullLoader)
 
         # Open the RFM atmosphere input file
+        if not os.path.isdir(f'{self.wd}/atm'):
+            os.makedirs(f'{self.wd}/atm')
         with open(f'{self.wd}/atm/layer.atm', 'w') as atm:
 
             # Write header lines
