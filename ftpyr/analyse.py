@@ -70,11 +70,6 @@ class Analyser(object):
         The output filename. If None, then no file is written. Default is None.
     tolerance : float, optional
         The fit tolerance to use in scipy.curve_fit. Default is 0.01.
-    bg_behaviour : str, optional
-        How the background spectrum is handled, if it is provided. Must be
-        either subtract or divide. Default is subtract.
-    bg_spectrum : xarray.DataArray, optional
-        The spectrum to use in the background correction. Default is None.
     output_ppmm_flag : bool, optional
         If True then the output gas values are converted to ppm.m from
         molecules/cm2. Default is False.
@@ -104,8 +99,8 @@ class Analyser(object):
                  solar_flag=False, obs_height=0.0, update_params=True,
                  residual_limit=10, zero_fill_factor=0, model_padding=50,
                  model_pts_per_cm=100, apod_function='NB_medium', outfile=None,
-                 tolerance=0.001, bg_behaviour='subtract', bg_spectrum=None,
-                 output_ppmm_flag=False, gas_auto_apriori=True):
+                 tolerance=0.001, output_ppmm_flag=False,
+                 gas_auto_apriori=True):
         """Initialise the Analyser."""
         # Generate the RFM object
         logger.debug('Setting up RFM')
@@ -153,15 +148,6 @@ class Analyser(object):
             gas_units = 'ppm.m'
         else:
             gas_units = 'molecules.cm-2'
-
-        # Process the background spectrum
-        self.bg_behaviour = bg_behaviour
-        self.bg_spectrum = bg_spectrum
-
-        # Apply zero-filling to the background if required
-        if self.zero_fill_factor and bg_spectrum is not None:
-            self.bg_spectrum = zero_fill(
-                self.bg_spectrum, self.zero_fill_factor)
 
         # Calculate the model x-grid
         # This includes a 1 cm-1 padding on either side to allow shifts
@@ -250,21 +236,6 @@ class Analyser(object):
         # Apply zero-filling
         if self.zero_fill_factor:
             spectrum = zero_fill(spectrum, self.zero_fill_factor)
-
-        # If a background spectrum is given, perform the background correction
-        if self.bg_spectrum is not None:
-            if self.bg_behaviour == 'subtract':
-                spectrum = xr.DataArray(
-                    data=np.subtract(spectrum, self.bg_spectrum),
-                    coords=spectrum.coords,
-                    attrs=spectrum.attrs
-                )
-            elif self.bg_behaviour == 'divide':
-                spectrum = xr.DataArray(
-                    data=np.divide(spectrum, self.bg_spectrum),
-                    coords=spectrum.coords,
-                    attrs=spectrum.attrs
-                )
 
         # Extract the region we are interested in
         full_xgrid = spectrum.coords['Wavenumber'].to_numpy()
