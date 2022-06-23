@@ -221,7 +221,7 @@ def read_spectacle(filename):
     # Unpack the desired variables
     wn_start = float(hdata[1])
     wn_stop = float(hdata[2])
-    wn_step = float(hdata[3])
+    # wn_step = float(hdata[3])
     date_str = hdata[5].replace(b'\x00', b' ').decode("utf-8")
     npts = int(hdata[7])
 
