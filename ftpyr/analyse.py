@@ -163,7 +163,7 @@ class Analyser(object):
         logger.info('Generating initial ILS')
         try:
             self.apod_function = apod_function
-            self._make_ils(
+            self._make_ils_new(
                 params['opd'].value,
                 params['fov'].value,
                 self.apod_function
@@ -366,7 +366,7 @@ class Analyser(object):
 
         # Generate the ILS is any ILS parameters are being fit
         if self.params['opd'].vary or self.params['fov'].vary:
-            self._make_ils(abs(p['opd']), abs(p['fov']))
+            self._make_ils_new(abs(p['opd']), abs(p['fov']))
 
         # Convole with the ILS
         spec = np.convolve(raw_spec, self.ils, mode='same')
@@ -507,6 +507,93 @@ class Analyser(object):
         self.ils = norm_ils
 
         return norm_ils
+
+    def _make_ils_new(self, opd, fov, apod_function='NB_medium'):
+        """."""
+        # Convert fov from milliradians to radians
+        fov = fov / 1000
+        
+        # --------------- DEFINE STARTING PARAMETERS  ---------------------
+        # Define the total OPD as [in cm] the sampling frequency
+        n_per_wave = self.model_pts_per_cm
+        total_opd = n_per_wave
+
+        # Set the number of points in the interferograms (IGM)
+        # Total IGM
+        n_total_igm = int(total_opd * n_per_wave)
+
+        # FTIR IGM
+        n_ftir_igm = int(opd * n_per_wave)
+
+        # Filler IGM (difference between the two)
+        n_filler_igm = int(n_total_igm - n_ftir_igm)
+
+        # Create the IGM grids (in cm)
+        # total_igm_grid = np.linspace(0, total_opd, n_ftir_igm)
+        ftir_igm_grid = np.linspace(0, opd, n_ftir_igm)
+
+        # Create empty IGM arrays
+        ftir_igm = np.zeros(n_ftir_igm)
+        filler_igm = np.zeros(n_filler_igm)
+
+        # ---------------------- GENERATE THE IGMS ------------------------
+        # Get the apod parameters
+        c = self.apod_param_dict[apod_function]
+
+        # Now build
+        for i in range(4):
+            add_igm = c[i] * ((1 - (ftir_igm_grid / opd) ** 2)) ** i
+            ftir_igm = ftir_igm + add_igm
+
+        # Fill the rest of the signal with zeros
+        igm = np.concatenate((ftir_igm, filler_igm))
+
+        # ---------------------- RECONSTRUCT KERNEL ------------------------
+        # Apply Fourier Transform to reconstruct spectrum
+        spc = np.fft.fft(igm).real
+
+        # Split the spectrum in the middle and mirror around axis
+        # Find middle point
+        middle = n_total_igm // 2
+
+        # Beginning of the signal is the tapering edge
+        # (right side of the kernel)
+        spc_right = spc[0:middle]
+
+        # End of the signal is the rising edge (left side of the kernel)
+        spc_left = spc[middle:]
+
+        # Reconstruct spectrum around the middle point
+        spc = np.concatenate((spc_left, spc_right))
+
+        # Remove offset in spectrum
+        offset = spc[0:middle//2].mean(axis=0)
+        spc = spc - offset
+
+        # FOV effect is like a boxcar in freq space
+        fov_width = self.wn_start * (1 - np.cos(fov/2))      # in [cm^-1]
+        shift = self.wn_start * (1 - np.cos(fov/2)) * 0.5    # in [cm^-1]
+        n_box = int(np.ceil(fov_width * n_per_wave))
+        if n_box < 0 or n_box > middle:
+            n_box = 5
+        boxcar = np.ones(n_box) * 1 / n_box
+        spc_fov = np.convolve(spc, boxcar, 'same')
+        spc_fov = spc_fov / spc_fov.sum()
+
+        # Create the wavenumber grid centred on zero
+        wave = np.linspace(-total_opd / 2, total_opd / 2, n_total_igm)
+
+        # select the middle +/- 5 wavenumbers
+        # (minimum window size is then 10 cm^-1)
+        start = int(middle - 5 * n_per_wave)
+        stop = int(middle + 5 * n_per_wave)
+        kernel = spc_fov[start:stop]
+        kernel = kernel / kernel.sum(axis=0)
+        grid = wave[start:stop]
+
+        self.ils = kernel
+
+        return kernel
 
 
 def zero_fill(spectrum, zero_fill_factor):
