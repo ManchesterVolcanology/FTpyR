@@ -13,7 +13,8 @@ from scipy import odr
 from functools import partial
 from scipy.optimize import curve_fit
 from PySide6.QtGui import QIcon, QAction
-from PySide6.QtCore import Qt, QObject, Signal, Slot, QThreadPool, QRunnable
+from PySide6.QtCore import (Qt, QObject, QTimer, Signal, Slot, QThreadPool,
+                            QRunnable)
 from PySide6.QtWidgets import (QMainWindow, QScrollArea, QGridLayout,
                                QApplication, QToolBar, QFrame, QSplitter,
                                QProgressBar, QLabel, QLineEdit, QTextEdit,
@@ -260,24 +261,13 @@ class MainWindow(QMainWindow):
         # Add layout
         file_layout = QGridLayout(fileTab)
         file_layout.setAlignment(Qt.AlignTop)
-
-        # Add an input for the save selection
-        file_layout.addWidget(QLabel('Output\nFolder:'), 0, 0)
-        self.widgets['save_dir'] = QLineEdit('Results')
-        self.widgets['save_dir'].setToolTip('Folder to hold results')
-        file_layout.addWidget(self.widgets['save_dir'], 0, 1, 1, 3)
-        btn = QPushButton('Browse')
-        btn.setFixedSize(70, 25)
-        btn.clicked.connect(
-            partial(self.browse, self.widgets['save_dir'], 'folder', None)
-        )
-        file_layout.addWidget(btn, 0, 4)
+        nrow = 0
 
         # Add an input for the spectra selection
-        file_layout.addWidget(QLabel('Spectra:'), 1, 0)
+        file_layout.addWidget(QLabel('Spectra:'), nrow, 0)
         self.widgets['spec_fnames'] = QTextEdit()
         self.widgets['spec_fnames'].setToolTip('Measurement spectrum files')
-        file_layout.addWidget(self.widgets['spec_fnames'], 1, 1, 1, 3)
+        file_layout.addWidget(self.widgets['spec_fnames'], nrow, 1, 1, 3)
         self.widgets['spec_fnames'].textChanged.connect(
             self.plot_first_spectrum
         )
@@ -287,52 +277,80 @@ class MainWindow(QMainWindow):
         btn.clicked.connect(
             partial(self.browse, self.widgets['spec_fnames'], 'multi', None)
         )
-        file_layout.addWidget(btn, 1, 4)
+        file_layout.addWidget(btn, nrow, 4)
+        nrow += 3
 
-        # # Add an input for the background spectrum
-        # file_layout.addWidget(QLabel('Background\nSpectrum:'), 2, 0)
-        # self.widgets['bg_fname'] = QLineEdit()
-        # file_layout.addWidget(self.widgets['bg_fname'], 2, 1, 1, 3)
-        # btn = QPushButton('Browse')
-        # btn.setFixedSize(70, 25)
-        # btn.clicked.connect(
-        #     partial(self.browse, self.widgets['bg_fname'], 'single', None)
-        # )
-        # file_layout.addWidget(btn, 2, 4)
-        #
-        # # Add control for background correction
-        # file_layout.addWidget(QLabel('Background\nBehaviour:'), 3, 0)
-        # self.widgets['bg_behaviour'] = QComboBox()
-        # self.widgets['bg_behaviour'].addItems(
-        #     ['ignore', 'subtract', 'divide'])
-        # self.widgets['bg_behaviour'].setFixedSize(100, 20)
-        # file_layout.addWidget(self.widgets['bg_behaviour'], 3, 1)
+        # Add an input for a directory to watch
+        file_layout.addWidget(QLabel('Watch Folder:'), nrow, 0)
+        self.widgets['watch_dir'] = QLineEdit()
+        self.widgets['watch_dir'].setToolTip('Directory to watch')
+        file_layout.addWidget(self.widgets['watch_dir'], nrow, 1, 1, 3)
+        btn = QPushButton('Browse')
+        btn.setFixedSize(70, 25)
+        btn.clicked.connect(
+            partial(self.browse, self.widgets['watch_dir'], 'folder', None)
+        )
+        file_layout.addWidget(btn, nrow, 4)
+        nrow += 1
+
+        # Add an input for a directory to watch
+        file_layout.addWidget(QLabel('Analysis\nMode:'), nrow, 0)
+        self.widgets['analysis_mode'] = QComboBox()
+        self.widgets['analysis_mode'].addItems(['Post-Process', 'Real-Time'])
+        self.widgets['analysis_mode'].currentTextChanged.connect(
+            self.flip_mode
+        )
+        file_layout.addWidget(self.widgets['analysis_mode'], nrow, 1, 1, 3)
+        nrow += 1
+
+        # Add an input for the save selection
+        file_layout.addWidget(QLabel('Output\nFolder:'), nrow, 0)
+        self.widgets['save_dir'] = QLineEdit('Results')
+        self.widgets['save_dir'].setToolTip('Folder to hold results')
+        file_layout.addWidget(self.widgets['save_dir'], nrow, 1, 1, 3)
+        btn = QPushButton('Browse')
+        btn.setFixedSize(70, 25)
+        btn.clicked.connect(
+            partial(self.browse, self.widgets['save_dir'], 'folder', None)
+        )
+        file_layout.addWidget(btn, nrow, 4)
+        nrow += 1
+
+        # RFM setup ===========================================================
+
+        # Add tab
+        rfmTab = QWidget()
+        globalTabs.addTab(rfmTab, 'RFM')
+
+        # Add layout
+        rfm_layout = QGridLayout(rfmTab)
+        rfm_layout.setAlignment(Qt.AlignTop)
 
         # Add an input for the RFM exe path
-        file_layout.addWidget(QLabel('RFM:'), 4, 0)
+        rfm_layout.addWidget(QLabel('RFM:'), 0, 0)
         self.widgets['rfm_path'] = QLineEdit()
         self.widgets['rfm_path'].setToolTip('RFM executable file')
-        file_layout.addWidget(self.widgets['rfm_path'], 4, 1, 1, 3)
+        rfm_layout.addWidget(self.widgets['rfm_path'], 0, 1, 1, 3)
         btn = QPushButton('Browse')
         btn.setFixedSize(70, 25)
         btn.clicked.connect(
             partial(self.browse, self.widgets['rfm_path'], 'single', None)
         )
-        file_layout.addWidget(btn, 4, 4)
+        rfm_layout.addWidget(btn, 0, 4)
 
         # Add an input for the HITRAN database path
-        file_layout.addWidget(QLabel('HITRAN:'), 5, 0)
+        rfm_layout.addWidget(QLabel('HITRAN:'), 1, 0)
         self.widgets['hitran_path'] = QLineEdit()
         self.widgets['hitran_path'].setToolTip('HITRAN database file')
-        file_layout.addWidget(self.widgets['hitran_path'], 5, 1, 1, 3)
+        rfm_layout.addWidget(self.widgets['hitran_path'], 1, 1, 1, 3)
         btn = QPushButton('Browse')
         btn.setFixedSize(70, 25)
         btn.clicked.connect(
             partial(self.browse, self.widgets['hitran_path'], 'single', None)
         )
-        file_layout.addWidget(btn, 5, 4)
+        rfm_layout.addWidget(btn, 1, 4)
 
-        # Spectrometer setup ==================================================
+        # Model setup =========================================================
 
         # Add tab
         specTab = QWidget()
@@ -979,8 +997,18 @@ class MainWindow(QMainWindow):
         # Pull the widget data
         widgetData = self.getWidgetData()
 
+        # Get whether running in real time or post-analysis
+        self.analysis_mode = self.widgets['analysis_mode'].currentText()
+
         # Get the spectra to analyse
-        self.spectra_list = widgetData['spec_fnames'].split('\n')
+        if self.analysis_mode == 'Post-Process':
+            self.spectra_list = widgetData['spec_fnames'].split('\n')
+        else:
+            watch_dir = self.widgets.get('watch_dir')
+            files = os.listdir(watch_dir)
+            self.spectra_list = [f'{watch_dir}/{file}' for file in files]
+
+        # Create a spectrum counter
         self.spectrum_counter = 0
 
         # Create dictionary to hold fit results
@@ -1077,13 +1105,25 @@ class MainWindow(QMainWindow):
                     )
                 outfile.write('\n')
 
-            # If so, check if all spectra have been analysed
-            if self.spectrum_counter == len(self.spectra_list):
-                self.stop_analysis()
+            # For Post-Processing
+            if self.analysis_mode == 'Post-Process':
+                # If all spectra have been analysed, stop the analysis workers
+                if self.spectrum_counter == len(self.spectra_list):
+                    self.stop_analysis()
 
-            # If not, analyse the next spectrum
+                # If not, analyse the next spectrum
+                else:
+                    self.set_next_spectrum()
+
+            # For Real-Time processing
             else:
-                self.set_next_spectrum()
+                self.fileTimer = QTimer(self)
+                self.fileTimer.setInterval(100)
+                self.fileTimer.timeout.connect(self.check_for_next_spectrum)
+                self.fileTimer.start()
+
+    def check_for_next_spectrum(self):
+        """."""
 
     def set_next_spectrum(self):
         """Set next spectrum to analyse."""
@@ -1255,8 +1295,20 @@ class MainWindow(QMainWindow):
 
     def plot_first_spectrum(self):
         """Plot first spectrum in list."""
+        # Get the analysis mode
+        analysis_mode = self.widgets['analysis_mode'].currentText()
+
         try:
-            filename = self.widgets.get('spec_fnames').split('\n')[0]
+            # Get the first listed file, either from the input or the watched
+            # directory
+            if analysis_mode == 'Post-Process':
+                filename = self.widgets.get('spec_fnames').split('\n')[0]
+            else:
+                fpath = self.widgets.get('watch_dir')
+                files = os.listdir(fpath)
+                filename = f'{fpath}/{files[0]}'
+
+            # Plot if it has changed
             if filename != self.first_filename:
                 self.first_filename = filename
                 spectrum = read_spectrum(filename)
@@ -1344,6 +1396,20 @@ class MainWindow(QMainWindow):
                 if cwd in f:
                     fname[i] = f[len(cwd):]
             widget.setText('\n'.join(fname))
+
+    def flip_mode(self):
+        """Flip inputs on analysis mode."""
+        analysis_mode = self.widgets['analysis_mode'].currentText()
+        if analysis_mode == 'Post-Process':
+            self.widgets['watch_dir'].setEnabled(False)
+            self.widgets['spec_fnames'].setReadOnly(False)
+            self.widgets['spec_fnames'].setEnabled(True)
+            self.plot_first_spectrum()
+        else:
+            self.widgets['watch_dir'].setEnabled(True)
+            self.widgets['spec_fnames'].setReadOnly(True)
+            self.widgets['spec_fnames'].setEnabled(False)
+            self.plot_first_spectrum()
 
     # =========================================================================
     # Program settings and theme
