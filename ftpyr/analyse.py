@@ -652,10 +652,12 @@ class FitResult(object):
             # Calculate residual values
             self.max_residual = np.nanmax(np.abs(self.residual))
             self.std_residual = np.nanstd(self.residual)
+            self.fit_qual_flag = np.nanmax(
+                np.abs((self.spec - self.fit) / max(self.spec) * 100)
+            ) > residual_limit
 
             # Check the fit quality
-            if residual_limit is not None \
-                    and max(abs(self.residual)) > residual_limit:
+            if residual_limit is not None and self.fit_qual_flag:
                 logger.info('High residual detected')
                 self.nerr = 2
 
