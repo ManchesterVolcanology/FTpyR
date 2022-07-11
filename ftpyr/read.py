@@ -1,7 +1,4 @@
-"""Read in FTIR spectra from .spc files.
-
-Based on the spc_spectra library written by Rohan Isaac:
-See https://github.com/rohanisaac/spc for details
+"""Read in FTIR spectra into an xarray DataArray.
 """
 import os
 import struct
@@ -10,6 +7,8 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 from datetime import datetime
+
+from brukeropusreader import read_file
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +220,6 @@ def read_spectacle(filename):
     # Unpack the desired variables
     wn_start = float(hdata[1])
     wn_stop = float(hdata[2])
-    wn_step = float(hdata[3])
     date_str = hdata[5].replace(b'\x00', b' ').decode("utf-8")
     npts = int(hdata[7])
 
@@ -264,7 +262,9 @@ def read_cerburus(filename):
 
 def read_bruker(filename):
     """."""
+    spec_data = read_file(filename)
     raise ValueError('Read function not implemented yet!')
+    return spec_data
 
 
 def read_sb(filename):
@@ -321,13 +321,3 @@ def read_spectrum(filename, file_type=None):
     spectrum = read_func(filename)
 
     return spectrum
-
-
-if __name__ == '__main__':
-    fname = 'F:/FieldData/1998_Masaya_FTIR/03MAR98/AI033001.IRS'
-
-    spectrum = read_spectacle(fname)
-
-    import matplotlib.pyplot as plt
-    plt.plot(spectrum.coords['Wavenumber'], spectrum.to_numpy())
-    plt.show()
