@@ -8,7 +8,7 @@ import xarray as xr
 import pandas as pd
 from datetime import datetime
 
-from brukeropusreader import read_file
+# from brukeropusreader import read_file
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +262,7 @@ def read_cerburus(filename):
 
 def read_bruker(filename):
     """."""
-    spec_data = read_file(filename)
+    # spec_data = read_file(filename)
     raise ValueError('Read function not implemented yet!')
     return spec_data
 

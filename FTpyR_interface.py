@@ -12,16 +12,17 @@ import pandas as pd
 from scipy import odr
 from functools import partial
 from scipy.optimize import curve_fit
-from PySide6.QtGui import QIcon, QAction
-from PySide6.QtCore import (Qt, QObject, QTimer, Signal, Slot, QThreadPool,
-                            QRunnable)
-from PySide6.QtWidgets import (QMainWindow, QScrollArea, QGridLayout,
-                               QApplication, QToolBar, QFrame, QSplitter,
-                               QProgressBar, QLabel, QLineEdit, QTextEdit,
-                               QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox,
-                               QPlainTextEdit, QPushButton, QFileDialog,
-                               QWidget, QTabWidget, QDialog, QTableWidget,
-                               QTableWidgetItem, QMenu, QHeaderView)
+from PySide2.QtGui import QIcon
+from PySide2.QtCore import (
+    Qt, QObject, QTimer, Signal, Slot, QThreadPool, QRunnable
+)
+from PySide2.QtWidgets import (
+    QMainWindow, QScrollArea, QGridLayout, QApplication, QToolBar, QFrame,
+    QSplitter, QProgressBar, QLabel, QLineEdit, QTextEdit, QComboBox,
+    QCheckBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QPushButton,
+    QFileDialog, QWidget, QTabWidget, QDialog, QTableWidget, QTableWidgetItem,
+    QMenu, QHeaderView, QAction
+)
 import pyqtgraph as pg
 import pyqtgraph.dockarea as da
 
@@ -2110,4 +2111,4 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = MainWindow(app)
     window.show()
-    sys.exit(app.exec())
+    sys.exit(app.exec_())
