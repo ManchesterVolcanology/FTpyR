@@ -33,7 +33,7 @@ conda install numpy scipy pandas xarray
 If you want to also use the GUI, then the following are also required:
 
 ```
-conda install pyyaml PySide2 pyqtgraph
+conda install -c conda-forge pyyaml PySide2 pyqtgraph
 ```
 
 as well as this library, which is not available on conda and so must be installed with pip:
