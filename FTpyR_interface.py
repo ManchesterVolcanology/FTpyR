@@ -604,7 +604,7 @@ class MainWindow(QMainWindow):
         """Get a new window name from a popup and add it."""
         # Run new window wizard
         dialog = NewWindowWizard(self)
-        if not dialog.exec():
+        if not dialog.exec_():
             return
         self.addFitWindow(**dialog.info)
 
@@ -1960,7 +1960,7 @@ class paramTable(QTableWidget):
         menu = QMenu(self)
         addAction = menu.addAction('Add')
         remAction = menu.addAction('Remove')
-        action = menu.exec(self.mapToGlobal(event.pos()))
+        action = menu.exec_(self.mapToGlobal(event.pos()))
         if action == addAction:
             self.add_row()
         if action == remAction:
