@@ -250,6 +250,40 @@ def read_spectacle(filename):
     return spectrum
 
 
+def read_ascii(filename):
+    """Read plain text file with two columns holding wavenumber and intensity.
+
+    The read time should be parsed from the filename if possible.
+
+    Parameters
+    ----------
+    filename : str
+        File to read in
+    """
+    # Create a dictionary to hold the metadata
+    metadata = {'filename': filename}
+
+    # Try to parse the timestamp from the filename
+    try:
+        ts = pd.to_datetime(
+            filename[-28:-5] + '000', format='%Y_%m_%d_%H_%M_%S_%f'
+        )
+    except Exception:
+        ts = pd.NaT
+    metadata['timestamp'] = ts
+
+    # Read in the file
+    xdata, ydata = np.loadtxt(filename, unpack=True)
+
+    spectrum = xr.DataArray(
+        data=ydata,
+        coords={'Wavenumber': xdata},
+        attrs=metadata
+    )
+
+    return spectrum
+
+
 def read_sbm(filename):
     """."""
     raise ValueError('Read function not implemented yet!')
@@ -285,7 +319,8 @@ filetype_dict = {
     'Midac AUTOQUANT': read_sb,
     'Midac Spectacle': read_spectacle,
     'Essential interferogram': read_ifg,
-    'Essential spectrum': read_spc
+    'Essential spectrum': read_spc,
+    'Ascii': read_ascii
 }
 
 extension_dict = {
@@ -296,7 +331,8 @@ extension_dict = {
     '.rsb': 'Midac AUTOQUANT',
     '.irs': 'Midac Spectacle',
     '.ifg': 'Essential interferogram',
-    '.spc': 'Essential spectrum'
+    '.spc': 'Essential spectrum',
+    '.prn': 'Ascii'
 }
 
 
@@ -309,7 +345,7 @@ def read_spectrum(filename, file_type=None):
     if file_type is None:
 
         # Get the file extension
-        file, extension = os.path.splitext(filename)
+        _, extension = os.path.splitext(filename)
 
         # Assign the file type
         file_type = extension_dict[extension.lower()]
