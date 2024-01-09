@@ -273,7 +273,7 @@ class Analyser(object):
             nerr = 1
 
         # Put the results into a FitResult object
-        fit = FitResult(self, [self.grid, self.spec], popt, perr, nerr,
+        fit = FitResult(self, [self.grid, self.spec], popt, pcov, perr, nerr,
                         self.iter_count, self.residual_limit, calc_od)
 
         # Update the initial fit parameters
@@ -753,6 +753,8 @@ class FitResult(object):
         The spectrum fitted by the Analyser
     popt : numpy array
         The optimised parameters
+    pcov : numpy array
+        The covariance array
     perr : numpy array
         The error on the optimised parameters
     nerr : int
@@ -786,7 +788,7 @@ class FitResult(object):
         Contains, for each gas, the fitted optical depth spectrum.
     """
 
-    def __init__(self, analyser, spectrum, popt, perr, nerr, iter_count,
+    def __init__(self, analyser, spectrum, popt, pcov, perr, nerr, iter_count,
                  residual_limit, calc_od):
         """Initialise the FItResult."""
 
@@ -794,6 +796,7 @@ class FitResult(object):
         self.params = analyser.params
         self.grid, self.spec = spectrum
         self.popt = popt
+        self.pcov = pcov
         self.perr = perr
         self.nerr = nerr
         self.iter_count = iter_count

@@ -206,6 +206,8 @@ class MainWindow(QMainWindow):
         self.windows = []
         self.plot_axes = {}
         self.plot_lines = {}
+        self.cov_plot = {}
+        self.cov_imview = {}
         self.plot_regions = {}
         self.results_tables = {}
         self.species_list = {}
@@ -705,8 +707,10 @@ class MainWindow(QMainWindow):
         # Make graph and table tabs
         graphTab = QWidget()
         tableTab = QWidget()
+        covarTab = QWidget()
         self.outputTabs[name].addTab(graphTab, 'Graphs')
         self.outputTabs[name].addTab(tableTab, 'Results')
+        self.outputTabs[name].addTab(covarTab, 'Covariance')
 
         # Output graphs =======================================================
 
@@ -819,6 +823,29 @@ class MainWindow(QMainWindow):
 
         tlayout.addWidget(resTable, 0, 0)
 
+        # Gas covariance plot =================================================
+
+        # Generate plot area
+        clayout = QGridLayout(covarTab)
+        cov_area = da.DockArea()
+        clayout.addWidget(cov_area, 0, 0)
+
+        # Generate the docks
+        cov_dock = da.Dock('Covariance')
+        cov_area.addDock(cov_dock, 'top')
+
+        # Generate axes
+        # ax0 = pg.PColorMeshItem()
+        # cov_dock.addWidget(ax0)
+
+        # Generate axes
+        plot = pg.PlotItem()
+        im_view = pg.ImageView(view=plot)
+        im_view.setColorMap(pg.colormap.get('plasma'))
+        cov_dock.addWidget(im_view)
+        self.cov_plot[name] = plot
+        self.cov_imview[name] = im_view
+
         # Add to overall widgets ==============================================
 
         self.windowWidgets[name] = winWidgets
@@ -868,6 +895,8 @@ class MainWindow(QMainWindow):
         self.outputTabs.pop(name)
         self.windowWidgets.pop(name)
         self.plot_lines.pop(name)
+        self.cov_plot.pop(name)
+        self.cov_imview.pop(name)
         self.plot_axes.pop(name)
         self.plot_regions.pop(name)
 
@@ -1208,6 +1237,20 @@ class MainWindow(QMainWindow):
             # Update the table
             self.results_tables[name].setItem(i, 2, QTableWidgetItem(str(val)))
             self.results_tables[name].setItem(i, 3, QTableWidgetItem(str(err)))
+
+        # Update covariance plot
+        gases = [gas for gas in fit.params.extract_gases().keys()]
+        ngases = len(gases)
+        tick_pos = np.arange(ngases) + 0.5
+        cov_data = np.log10(np.sqrt(abs(fit.pcov[:ngases, :ngases])))
+        try:
+            self.cov_imview[name].setImage(cov_data)
+        except Exception:
+            self.cov_imview[name].setImage(np.zeros([ngases, ngases]))
+        yax = self.cov_plot[name].getAxis('left')
+        yax.setTicks([[(tick_pos[i], gases[i]) for i in range(ngases)]])
+        xax = self.cov_plot[name].getAxis('bottom')
+        xax.setTicks([[(tick_pos[i], gases[i]) for i in range(ngases)]])
 
     def update_ratio_plot(self):
         """Update the data shown on the ratio plot."""
