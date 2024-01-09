@@ -51,7 +51,7 @@ class RFM(object):
 
     def __init__(self, exe_path, hitran_path, wn_start, wn_stop,
                  model_padding=50, solar_flag=False, obs_height=0.0,
-                 model_pts_per_cm=100):
+                 model_pts_per_cm=100, vmr_file='databases/atm_layer.yml'):
         """."""
         # Assign object variables =============================================
         self.exe_path = str(exe_path)
@@ -80,6 +80,10 @@ class RFM(object):
                 'Start wavenumber must be lower than stop wavenumber!'
             )
 
+        # Read in the volume mixing ratios
+        with open(vmr_file, 'r') as ymlfile:
+            self.vmr = yaml.load(ymlfile, Loader=yaml.FullLoader)
+
     def calc_optical_depths(self, params):
         """Calculate gas optical depths using RFM.
 
@@ -99,7 +103,10 @@ class RFM(object):
 
         # Iterate through the desired gases
         logger.info('Calculating gas optical depths')
-        for i, [name, gas] in enumerate(gas_params.items()):
+        for gas in gas_params.values():
+
+            # Pull gas mixing ratio
+            gas_vmr = self.vmr[gas.species]
 
             # Form cache filename
             wn_lo_limit = self.wn_start - self.model_padding
@@ -107,7 +114,8 @@ class RFM(object):
             fname = f'{gas.species}_' \
                     f'{wn_lo_limit:.1f}_{wn_hi_limit:.1f}_' \
                     f'{gas.pres:.1f}_{gas.temp:.1f}_{gas.path}_' \
-                    f'{self.model_pts_per_cm}'
+                    f'{self.model_pts_per_cm}_' \
+                    f'{gas_vmr:.2E}'
             fname = fname.replace('.', 'p') + '.nc'
 
             # Generate a flag to control if the calculation is run or not
@@ -259,9 +267,6 @@ class RFM(object):
 
     def _write_profile(self, pressure, temperature):
         """."""
-        # Read in the molecule data
-        with open('databases/atm_layer.yml', 'r') as ymlfile:
-            vmr = yaml.load(ymlfile, Loader=yaml.FullLoader)
 
         # Open the RFM atmosphere input file
         if not os.path.isdir(f'{self.wd}/atm'):
@@ -283,7 +288,7 @@ class RFM(object):
             )
 
             # Write molecule lines
-            for name, mol in vmr.items():
+            for name, mol in self.vmr.items():
                 atm.write(f'*{name} [ppmv]\n {mol:.3E}\n')
 
             # Write the file end
