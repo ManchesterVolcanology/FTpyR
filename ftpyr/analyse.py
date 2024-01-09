@@ -163,10 +163,12 @@ class Analyser(object):
         logger.info('Generating initial ILS')
         try:
             self.apod_function = apod_function
-            self._make_ils_new(
-                params['opd'].value,
-                params['fov'].value,
-                self.apod_function
+            self.make_ils_jf(
+                max_opd=params['opd'].value,
+                fov=params['fov'].value,
+                nper_wn=self.model_pts_per_cm,
+                wn=(self.model_grid.max() - self.model_grid.min()) / 2,
+                apod_function=self.apod_function
             )
         except KeyError:
             logger.error('Ensure both "opd" and "fov" are defined in params!')
@@ -354,7 +356,7 @@ class Analyser(object):
         # Convert to transmission
         trans_arr = np.exp(-od_arr)
 
-        # Mulitply all transmittances
+        # Multiply all transmittances
         total_trans = np.prod(trans_arr, axis=0)
 
         # Multiply by the background
@@ -366,9 +368,15 @@ class Analyser(object):
 
         # Generate the ILS is any ILS parameters are being fit
         if self.params['opd'].vary or self.params['fov'].vary:
-            self._make_ils_new(abs(p['opd']), abs(p['fov']))
+            self.make_ils_jf(
+                max_opd=abs(p['opd']),
+                fov=abs(p['fov']),
+                nper_wn=self.model_pts_per_cm,
+                wn=(self.model_grid.max() - self.model_grid.min()) / 2,
+                apod_function=self.apod_function
+            )
 
-        # Convole with the ILS
+        # Convolve with the ILS
         spec = np.convolve(raw_spec, self.ils, mode='same')
 
         # Apply shift and stretch to the model_grid
@@ -512,7 +520,7 @@ class Analyser(object):
         """."""
         # Convert fov from milliradians to radians
         fov = fov / 1000
-        
+
         # --------------- DEFINE STARTING PARAMETERS  ---------------------
         # Define the total OPD as [in cm] the sampling frequency
         n_per_wave = self.model_pts_per_cm
@@ -594,6 +602,112 @@ class Analyser(object):
         self.ils = kernel
 
         return kernel
+
+    def make_ils_jf(self, max_opd=1.8, fov=30, nper_wn=25, wn=1000,
+                    apod_function='NB medium'):
+
+        # Relabel variables
+        L = max_opd
+
+        # Total length of 1-sided interferometer is the resolution
+        total_opd = nper_wn
+
+        # Set available apodisation functions
+        apod_functions = [
+            'Boxcar', 'Uniform', 'Triangular', 'Blackman-Harris',
+            'Happ-Genzel', 'Hamming', 'Lorenz', 'Gaussian',
+            'NB weak', 'NB medium', 'NB strong', 'Cosine'
+        ]
+        apod_function = apod_function.lower()
+
+        # ----- Build grid based on max OPD -----
+        n = int(L * nper_wn)
+        if n % 2 == 0:
+            n = n + 1
+        L_grid = np.linspace(0, L, n)
+        n_tot = int(total_opd * nper_wn)
+        filler = np.zeros(n_tot - n)
+
+        # ----- Build apodization functions -----
+        # Boxcar function (no apodization, sampling function should be perfect
+        # sinc)
+        if 'boxcar' in apod_function or 'uniform' in apod_function:
+            apod = np.ones(n)
+        # Triangular function
+        elif 'triang' in apod_function:
+            apod = 1 - np.abs(L_grid) / L
+        # Norton-Beer functions (NB)
+        elif 'nb' in apod_function or 'norton' in apod_function or 'beer' in apod_function:
+            # 'NB weak'
+            if 'weak' in apod_function:
+                c = [0.348093, -0.087577, 0.703484, 0.0]
+            # NB strong
+            elif 'strong' in apod_function:
+                c = [0.045335, 0.0, 0.554883, 0.399782]
+            # NB medium (default if nothing is specified)
+            else:
+                c = [0.152442, -0.136176, 0.983734, 0]
+            # # Now build
+            apod = np.zeros(n)
+            for i in range(4):
+                apod = apod + c[i] * (1 - (L_grid / L) ** 2) ** i
+
+        # Hamming function (also known as Happ-Genzel function)
+        elif 'hamming' in apod_function or 'happ' in apod_function or 'genzel' in apod_function:
+            apod = 0.54 + 0.46 * np.cos(np.pi * L_grid / L)
+        # Blackman-Harris function
+        elif 'blackman' in apod_function or 'harris' in apod_function:
+            apod = 0.42 + 0.5 * np.cos(np.pi * L_grid / L) + 0.08 * np.cos(2 * np.pi * L_grid / L)
+        # Cosine function
+        elif 'cos' in apod_function:
+            apod = np.cos(np.pi * L_grid / (2 * L))
+        # Lorenz function
+        elif 'lorenz' in apod_function:
+            apod = np.exp(-np.abs(L_grid) / L)
+        elif 'gauss' in apod_function:
+            apod = np.exp(-(2.24 * L_grid / L) ** 2)
+
+        else:
+            ValueError(
+                'Invalid keyword for "apod_function". '
+                'Please choose from (case insensitive) % s' % apod_functions
+            )
+
+        # ----- Take Fourier Transform and get sampling kernel -----
+        # Add zeros to simulate infinite length and take FT
+        kernel = np.fft.fft(np.concatenate((apod, filler))) .real
+        middle = n_tot // 2
+
+        # Split in the middle and mirror around wn_grid
+        kernel = np.concatenate((kernel[middle:], kernel[0:middle]))
+        offset = kernel[0:middle // 2].mean(axis=0)
+        kernel = kernel - offset        # Remove offset in spectrum
+
+        # Create the wavenumber grid centred on zero
+        wn_grid = np.linspace(-total_opd / 2, total_opd / 2, n_tot)
+
+        # Build boxcar filter for FOV effect
+        fov_width = wn * (fov/1000/2) ** 2 / 2  # in [cm^-1]
+        n_box = int(np.ceil(fov_width * nper_wn))
+        if n_box < 0 or n_box > middle:
+            n_box = 5
+        boxcar = np.ones(n_box) * 1 / n_box
+        kernel = np.convolve(kernel, boxcar, 'same')
+
+        # Apply shift due to FOV effect
+        shift = fov_width / 2
+        shift_wn_grid = wn_grid - shift
+        kernel = np.interp(wn_grid, shift_wn_grid, kernel)
+        kernel = kernel / kernel.sum(axis=0)
+
+        # Only keep the first 5 limbs
+        idx = np.abs(wn_grid) <= 5 / L
+        wn_grid = wn_grid[idx]
+        kernel = kernel[idx]
+
+        self.ils = kernel[1:]
+
+        return kernel[1:]
 
 
 def zero_fill(spectrum, zero_fill_factor):
