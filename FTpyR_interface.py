@@ -1131,7 +1131,9 @@ class MainWindow(QMainWindow):
 
                     # Write the fit quality result
                     outfile.write(
-                        f',{fit.nerr},{fit.max_residual},{fit.std_residual}'
+                        f',{fit.nerr},'
+                        f'{fit.data.residual.data.max()},'
+                        f'{fit.data.residual.data.std()}'
                     )
                 outfile.write('\n')
 
@@ -1194,32 +1196,40 @@ class MainWindow(QMainWindow):
         plot_gas = self.windowWidgets[name].get('target_species')
 
         # Update the fit plot
-        self.plot_lines[name][0].setData(fit.grid, fit.spec)
-        self.plot_lines[name][1].setData(fit.grid, fit.fit)
+        self.plot_lines[name][0].setData(fit.data.wavenumber, fit.data.spectrum)
+        self.plot_lines[name][1].setData(fit.data.wavenumber, fit.data.fit)
 
         # Add optional lines
         if self.windowWidgets[name].get('plot_i0'):
             self.plot_lines[name][2].setData(
-                fit.grid, fit.bg_poly + np.nan_to_num(fit.offset)
+                fit.data.wavenumber,
+                fit.data.bg_poly + np.nan_to_num(fit.data.offset)
             )
         else:
             self.plot_lines[name][2].setData([], [])
         if self.windowWidgets[name].get('plot_bg'):
-            self.plot_lines[name][3].setData(fit.grid, fit.bg_poly)
+            self.plot_lines[name][3].setData(
+                fit.data.wavenumber, fit.data.bg_poly)
         else:
             self.plot_lines[name][3].setData([], [])
         if self.windowWidgets[name].get('plot_os'):
-            self.plot_lines[name][4].setData(fit.grid, fit.offset)
+            self.plot_lines[name][4].setData(
+                fit.data.wavenumber, fit.data.offset
+            )
         else:
             self.plot_lines[name][4].setData([], [])
 
         # Add residual
-        self.plot_lines[name][5].setData(fit.grid, fit.residual)
+        self.plot_lines[name][5].setData(fit.data.wavenumber, fit.data.residual)
 
         # Add optical depths
         try:
-            self.plot_lines[name][6].setData(fit.grid, fit.meas_od[plot_gas])
-            self.plot_lines[name][7].setData(fit.grid, fit.fit_od[plot_gas])
+            self.plot_lines[name][6].setData(
+                fit.data.wavenumber, fit.data[f'{plot_gas}_measured_od']
+            )
+            self.plot_lines[name][7].setData(
+                fit.data.wavenumber, fit.data[f'{plot_gas}_fitted_od']
+            )
         except KeyError:
             pass
 

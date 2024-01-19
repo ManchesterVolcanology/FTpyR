@@ -13,15 +13,15 @@ class Parameters(OrderedDict):
         self.update(*args, **kwargs)
 
     def add(self, name, value=0.0, vary=True, species=None, path=None,
-            pres=None, temp=None):
+            pres=None, temp=None, lo_bound=-np.inf, hi_bound=np.inf):
         """."""
-        self.__setitem__(name, Parameter(name=name,
-                                         value=value,
-                                         vary=vary,
-                                         species=species,
-                                         path=path,
-                                         pres=pres,
-                                         temp=temp))
+        self.__setitem__(
+            name,
+            Parameter(
+                name=name, value=value, vary=vary, species=species, path=path,
+                pres=pres, temp=temp, lo_bound=lo_bound, hi_bound=hi_bound
+            )
+        )
 
     def extract_gases(self, layer_key=None):
         """Return only gas parameters based on layer key."""
@@ -61,11 +61,18 @@ class Parameters(OrderedDict):
         """Return a list of the optimised parameters."""
         return [(p.fit_val) for p in self.values() if p.vary]
 
+    def get_bounds(self):
+        """Return a list of parameter bounds."""
+        return [
+            [p.lo_bound for p in self.values() if p.vary],
+            [p.hi_bound for p in self.values() if p.vary]
+        ]
+
     def make_copy(self):
         """Return a deep copy of the Parameters object."""
         return copy.deepcopy(self)
 
-    def pretty_print(self, mincolwidth=8, precision=4, cols='basic'):
+    def pretty_print(self, mincolwidth=10, precision=4, cols='basic'):
         """Print the parameters in a nice way.
 
         Parameters
@@ -86,9 +93,11 @@ class Parameters(OrderedDict):
         """
         # Set default column choices
         def_cols = {
-            'all': ['name', 'value', 'vary', 'species', 'temp',
-                    'pres', 'path', 'fit_val', 'fit_err'],
-            'basic': ['name', 'value', 'vary']
+            'all': [
+                'name', 'value', 'vary', 'species', 'temp', 'pres', 'path',
+                'fit_val', 'fit_err', 'lo_bound', 'hi_bound'
+            ],
+            'basic': ['name', 'value', 'vary', 'lo_bound', 'hi_bound']
         }
 
         # Make list of columns
@@ -103,12 +112,25 @@ class Parameters(OrderedDict):
 
         if 'value' in cols:
             i = cols.index('value')
-            colwidth[i] = max([len(f'{p.value:.{precision}g}')
-                               for p in self.values()]) + 2
+            colwidth[i] = max(
+                [len(f'{p.value:.{precision}g}') for p in self.values()]
+            ) + 2
 
         if 'vary' in cols:
             i = cols.index('vary')
             colwidth[i] = mincolwidth
+
+        if 'lo_bound' in cols:
+            i = cols.index('lo_bound')
+            colwidth[i] = max(
+                [len(f'{p.lo_bound:.{precision}g}') for p in self.values()]
+            ) + 2
+
+        if 'hi_bound' in cols:
+            i = cols.index('hi_bound')
+            colwidth[i] = max(
+                [len(f'{p.hi_bound:.{precision}g}') for p in self.values()]
+            ) + 2
 
         if 'species' in cols:
             i = cols.index('species')
@@ -121,28 +143,33 @@ class Parameters(OrderedDict):
 
         if 'pres' in cols:
             i = cols.index('pres')
-            colwidth[i] = max([len(f'{p.pres:.{precision}g}')
-                               for p in self.values()]) + 2
+            colwidth[i] = max(
+                [len(f'{p.pres:.{precision}g}') for p in self.values()]
+            ) + 2
 
         if 'path' in cols:
             i = cols.index('path')
-            colwidth[i] = max([len(f'{p.path:.{precision}g}')
-                               for p in self.values()]) + 2
+            colwidth[i] = max(
+                [len(f'{p.path:.{precision}g}') for p in self.values()]
+            ) + 2
 
         if 'fit_val' in cols:
             i = cols.index('fit_val')
-            colwidth[i] = max([len(f'{p.fit_val:.{precision}g}')
-                               for p in self.values()]) + 2
+            colwidth[i] = max(
+                [len(f'{p.fit_val:.{precision}g}') for p in self.values()]
+            ) + 2
 
         if 'fit_err' in cols:
             i = cols.index('fit_err')
-            colwidth[i] = max([len(f'{p.fit_err:.{precision}g}')
-                               for p in self.values()]) + 2
+            colwidth[i] = max(
+                [len(f'{p.fit_err:.{precision}g}') for p in self.values()]
+            ) + 2
 
         # Make sure no widths are below the minimum
-        colwidth = [int(mincolwidth) if colwidth[i] < mincolwidth
-                    else int(colwidth[i])
-                    for i in range(len(cols))]
+        colwidth = [
+            int(mincolwidth) if colwidth[i] < mincolwidth
+            else int(colwidth[i]) for i in range(len(cols))
+        ]
 
         # Generate the title string
         title = ''
@@ -156,16 +183,19 @@ class Parameters(OrderedDict):
 
         # Write a row for each parameter
         for name, p in self.items():
-            d = {'name': f'{p.name}',
-                 'value': f'{p.value:.{precision}g}',
-                 'vary': f'{p.vary}',
-                 'species': f'{p.species}',
-                 'temp': f'{p.temp:.{precision}g}',
-                 'pres': f'{p.pres:.{precision}g}',
-                 'path': f'{p.path:.{precision}g}',
-                 'fit_val': f'{p.fit_val:.{precision}g}',
-                 'fit_err': f'{p.fit_err:.{precision}g}'
-                 }
+            d = {
+                'name': f'{p.name}',
+                'value': f'{p.value:.{precision}g}',
+                'vary': f'{p.vary}',
+                'lo_bound': f'{p.lo_bound:.{precision}g}',
+                'hi_bound': f'{p.hi_bound:.{precision}g}',
+                'species': f'{p.species}',
+                'temp': f'{p.temp:.{precision}g}',
+                'pres': f'{p.pres:.{precision}g}',
+                'path': f'{p.path:.{precision}g}',
+                'fit_val': f'{p.fit_val:.{precision}g}',
+                'fit_err': f'{p.fit_err:.{precision}g}'
+             }
 
             for col in cols:
                 msg += f'|{d[col]:^{colwidth[cols.index(col)]}}'
@@ -179,11 +209,13 @@ class Parameter(object):
     """."""
 
     def __init__(self, name, value, vary=True, species=None, path=None,
-                 pres=None, temp=None):
+                 pres=None, temp=None, lo_bound=-np.inf, hi_bound=np.inf):
         """."""
         self.name = str(name)
         self.value = float(value)
         self.vary = bool(vary)
+        self.lo_bound = lo_bound
+        self.hi_bound = hi_bound
         if species is not None:
             self.species = str(species)
             self.path = float(path)

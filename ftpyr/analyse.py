@@ -4,7 +4,7 @@ import numpy as np
 import xarray as xr
 from scipy import fft
 from scipy.interpolate import griddata
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, differential_evolution
 
 from ftpyr.rfm_control import RFM
 
@@ -248,10 +248,18 @@ class Analyser(object):
         self.grid = full_xgrid[idx != 0]
         self.spec = spectrum.to_numpy()[idx != 0]
 
+        # Pull the fit bounds
+        bounds = self.params.get_bounds()
+
         # Perform the fit
         try:
-            # Reset iteration counter
-            self.iter_count = 0
+
+            # p0 = differential_evolution(
+            #     self.fwd_model,
+            #     bounds=np.transpose(bounds)
+            # ).x
+
+            # print(p0)
 
             # Run fit and calculate parameter error
             popt, pcov = curve_fit(
@@ -259,7 +267,9 @@ class Analyser(object):
                 self.grid,
                 self.spec,
                 self.p0,
-                xtol=self.tolerance,
+                bounds=bounds,
+                # method='lm',
+                # xtol=self.tolerance,
                 ftol=self.tolerance
             )
             perr = np.sqrt(np.diag(pcov))
@@ -274,7 +284,7 @@ class Analyser(object):
 
         # Put the results into a FitResult object
         fit = FitResult(self, [self.grid, self.spec], popt, pcov, perr, nerr,
-                        self.iter_count, self.residual_limit, calc_od)
+                        self.residual_limit, calc_od)
 
         # Update the initial fit parameters
         if self.update_params and not fit.nerr:
@@ -306,7 +316,9 @@ class Analyser(object):
 
                 # Add fit quality info and start a new line
                 ofile.write(
-                    f',{fit.nerr},{fit.max_residual},{fit.std_residual}\n'
+                    f',{fit.nerr},'
+                    f'{fit.data.residual.data.max()},'
+                    f'{fit.data.residual.data.std()}\n'
                 )
 
         return fit
@@ -386,9 +398,6 @@ class Analyser(object):
 
         # Interpolate onto the measurement grid
         interp_spec = griddata(shift_model_grid, spec, x)
-
-        # Progress the iteration counter
-        self.iter_count += 1
 
         return interp_spec
 
@@ -759,8 +768,6 @@ class FitResult(object):
         The error on the optimised parameters
     nerr : int
         The error flag. 0 = no error, 1 = fit failed.
-    iter_count : int
-        The number of iterations taken to converge.
     residual_limit : float
         The maximum fit residual to allow a "good" fit
     calc_od : str or list
@@ -788,20 +795,21 @@ class FitResult(object):
         Contains, for each gas, the fitted optical depth spectrum.
     """
 
-    def __init__(self, analyser, spectrum, popt, pcov, perr, nerr, iter_count,
+    def __init__(self, analyser, spectrum, popt, pcov, perr, nerr,
                  residual_limit, calc_od):
         """Initialise the FItResult."""
 
         self.analyser = analyser
         self.params = analyser.params
-        self.grid, self.spec = spectrum
+
+        grid, spec = spectrum
+        coords = {'wavenumber': grid}
+
+        data_vars = {'spectrum': xr.DataArray(data=spec, coords=coords)}
         self.popt = popt
         self.pcov = pcov
         self.perr = perr
         self.nerr = nerr
-        self.iter_count = iter_count
-        self.meas_od = {}
-        self.fit_od = {}
 
         # Add the fit results to each parameter
         i = 0
@@ -819,64 +827,87 @@ class FitResult(object):
         if not self.nerr:
 
             # Generate the fit spectrum
-            self.fit = analyser.fwd_model(self.grid, *self.popt)
+            fit = analyser.fwd_model(grid, *self.popt)
+            data_vars['fit'] = xr.DataArray(data=fit, coords=coords)
 
             # Calculate the residual
-            self.residual = (self.spec - self.fit)/self.spec * 100
+            resid = (spec - fit)/spec * 100
+            data_vars['residual'] = xr.DataArray(data=resid, coords=coords)
 
-            # Calculate residual values
-            self.max_residual = np.nanmax(np.abs(self.residual))
-            self.std_residual = np.nanstd(self.residual)
-            self.fit_qual_flag = np.nanmax(
-                np.abs((self.spec - self.fit) / max(self.spec) * 100)
+            # Calculate max residual value
+            fit_qual_flag = np.nanmax(
+                np.abs((spec - fit) / max(spec) * 100)
             ) > residual_limit
 
             # Check the fit quality
-            if residual_limit is not None and self.fit_qual_flag:
+            if residual_limit is not None and fit_qual_flag:
                 logger.info('High residual detected')
                 self.nerr = 2
 
             # Calculate the background polynomial
-            self.bg_poly = np.polyval(
+            bg_poly = np.polyval(
                 np.flip(
                     [p.fit_val for p in self.params.values()
                      if 'bg_poly' in p.name]
                 ),
-                self.grid
+                grid
             )
+            data_vars['bg_poly'] = xr.DataArray(data=bg_poly, coords=coords)
 
             # Calculate the intensity offset
             offset_polyvars = np.flip(
                 [p.fit_val for p in self.params.values() if 'offset' in p.name]
             )
             if len(offset_polyvars) > 0:
-                self.offset = np.polyval(offset_polyvars, self.grid)
+                offset = np.polyval(offset_polyvars, grid)
             else:
-                self.offset = np.full(len(self.spec), np.nan)
+                offset = np.full(len(spec), np.nan)
+            data_vars['offset'] = xr.DataArray(data=offset, coords=coords)
 
             # Calculate optical depth spectra
             if calc_od == 'all':
-                calc_od = [par.name for par in self.params.values()
-                           if par.species is not None]
+                calc_od = [
+                    par.name for par in self.params.values()
+                    if par.species is not None
+                ]
+
             for par in calc_od:
                 if par in self.params:
-                    self._calc_od(par)
+                    meas_od, fit_od = self._calc_od(grid, spec, par)
+                    data_vars[f'{par}_measured_od'] = xr.DataArray(
+                        data=meas_od, coords=coords
+                    )
+                    data_vars[f'{par}_fitted_od'] = xr.DataArray(
+                        data=fit_od, coords=coords,
+                        attrs={'value': self.params[par].fit_val}
+                    )
 
         # If not then return nans
         else:
             logger.warn('Fit failed!')
-            self.fit = np.full(len(self.spec), np.nan)
-            self.residual = np.full(len(self.spec), np.nan)
-            self.max_residual = np.nan
-            self.std_residual = np.nan
-            self.bg_poly = np.full(len(self.spec), np.nan)
-            self.offset = np.full(len(self.spec), np.nan)
+            nan_array = xr.DataArray(
+                data=np.full(len(self.spec), np.nan), coords=coords
+            )
+            data_vars = {
+                **data_vars,
+                'fit': nan_array,
+                'residual': nan_array,
+                'bg_poly': nan_array,
+                'offset': nan_array
+            }
             for par in calc_od:
                 if par in self.params:
-                    self.meas_od[par] = np.full(len(self.spec), np.nan)
-                    self.fit_od[par] = np.full(len(self.spec), np.nan)
+                    data_vars[f'{par}_measured_od'] = xr.DataArray(
+                        data=nan_array, coords=coords
+                    )
+                    data_vars[f'{par}_fitted_od'] = xr.DataArray(
+                        data=nan_array, coords=coords,
+                        attrs={'value': self.params[par].fit_val}
+                    )
 
-    def _calc_od(self, par_name):
+        self.data = xr.Dataset(data_vars=data_vars)
+
+    def _calc_od(self, grid, spec, par_name):
         """Calculate the given gas optical depth spectrum."""
         # Make a copy of the parameters to use in the OD calculation
         params = self.params.make_copy()
@@ -890,7 +921,7 @@ class FitResult(object):
         # Calculate the fit without the parameter
         fit_params = params.popt_list()
         p = self.params.popt_dict()
-        fit = self.analyser.fwd_model(self.grid, *fit_params)
+        fit = self.analyser.fwd_model(grid, *fit_params)
 
         # Calculate the shifted model grid
         shift_coefs = [p[n] for n in p if 'shift' in n]
@@ -901,10 +932,9 @@ class FitResult(object):
         # Calculate the intensity offset
         offset_coefs = [p[n] for n in p if 'offset' in n]
         offset = np.polyval(np.flip(offset_coefs), self.analyser.model_grid)
-        offset = griddata(shift_model_grid,
-                          offset,
-                          self.grid,
-                          method='cubic')
+        offset = griddata(
+            shift_model_grid, offset, grid, method='cubic'
+        )
 
         # Calculate the parameter od
         par_od = np.multiply(
@@ -912,17 +942,13 @@ class FitResult(object):
             self.params[par_name].fit_val
         )
 
-        par_T = np.exp(-par_od)
-
-        ils_par_T = np.convolve(par_T, self.analyser.ils, mode='same')
-
-        ils_par_od = -np.log(ils_par_T)
-
         # Convolve with the ILS and interpolate onto the measurement grid
-        par_od = griddata(shift_model_grid, ils_par_od, self.grid)
+        par_T = np.exp(-par_od)
+        ils_par_T = np.convolve(par_T, self.analyser.ils, mode='same')
+        ils_par_od = -np.log(ils_par_T)
+        par_od = griddata(shift_model_grid, ils_par_od, grid)
 
-        # Add to self
-        self.meas_od[par_name] = -np.log(np.divide(self.spec-offset, fit))
-        self.fit_od[par_name] = par_od
+        meas_od = -np.log(np.divide(spec-offset, fit))
+        fit_od = par_od
 
-        return self.meas_od[par_name], self.fit_od[par_name]
+        return meas_od, fit_od
