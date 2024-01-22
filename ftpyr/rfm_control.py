@@ -51,7 +51,7 @@ class RFM(object):
 
     def __init__(self, exe_path, hitran_path, wn_start, wn_stop,
                  model_padding=50, solar_flag=False, obs_height=0.0,
-                 model_pts_per_cm=100, vmr_file='databases/atm_layer.yml'):
+                 model_pts_per_cm=25, vmr_file='databases/atm_layer.yml'):
         """."""
         # Assign object variables =============================================
         self.exe_path = str(exe_path)
