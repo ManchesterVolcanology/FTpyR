@@ -99,7 +99,7 @@ class Analyser(object):
                  solar_flag=False, obs_height=0.0, update_params=True,
                  residual_limit=10, zero_fill_factor=0, model_padding=50,
                  model_pts_per_cm=100, apod_function='NB_medium', outfile=None,
-                 tolerance=0.001, output_ppmm_flag=False,
+                 tolerance=1e-8, output_ppmm_flag=False,
                  gas_auto_apriori=True):
         """Initialise the Analyser."""
         # Generate the RFM object
@@ -268,7 +268,6 @@ class Analyser(object):
                 self.spec,
                 self.p0,
                 bounds=bounds,
-                # method='lm',
                 # xtol=self.tolerance,
                 ftol=self.tolerance
             )
@@ -361,7 +360,7 @@ class Analyser(object):
 
         # Calculate the gas optical depths
         od_arr = np.asarray(
-            [par.xsec_od * p[par.name] for par in self.params.values()
+            [par.original_od * p[par.name] for par in self.params.values()
              if par.species is not None]
         )
 
@@ -381,8 +380,8 @@ class Analyser(object):
         # Generate the ILS is any ILS parameters are being fit
         if self.params['opd'].vary or self.params['fov'].vary:
             self.make_ils_jf(
-                max_opd=abs(p['opd']),
-                fov=abs(p['fov']),
+                max_opd=p['opd'],
+                fov=p['fov'],
                 nper_wn=self.model_pts_per_cm,
                 wn=(self.model_grid.max() - self.model_grid.min()) / 2,
                 apod_function=self.apod_function
@@ -714,9 +713,9 @@ class Analyser(object):
         wn_grid = wn_grid[idx]
         kernel = kernel[idx]
 
-        self.ils = kernel[1:]
+        self.ils = kernel
 
-        return kernel[1:]
+        return kernel
 
 
 def zero_fill(spectrum, zero_fill_factor):
