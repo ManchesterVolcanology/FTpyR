@@ -4,7 +4,7 @@ import numpy as np
 import xarray as xr
 from scipy import fft
 from scipy.interpolate import griddata
-from scipy.optimize import curve_fit, differential_evolution
+from scipy.optimize import curve_fit
 
 from ftpyr.rfm_control import RFM
 
@@ -59,7 +59,7 @@ class Analyser(object):
         to artificially increase the sampling frequency. Increasing numbers
         use increassing zero-filling, determined by the next_fast_len function
         of the scipy.fft library. Default is 0.
-    model_pts_per_cm : int, optional
+    pts_per_cm : int, optional
         The number of points per cm-1 to use in the model wavenumber grid.
         Default is 100.
     apod_function : str, optional
@@ -87,20 +87,11 @@ class Analyser(object):
         The forward model used to fit spectra
     """
 
-    # Define apodisation parameters depending on the function
-    apod_param_dict = {
-        'boxcar':     [1.0,       0.0,      0.0,      0.0],
-        'NB_weak':    [0.348093, -0.087577, 0.703484, 0.0],
-        'NB_medium':  [0.152442, -0.136176, 0.983734, 0.0],
-        'NB_strong':  [0.045335,  0.0,      0.554883, 0.399782]
-    }
-
     def __init__(self, params, rfm_path, hitran_path, wn_start, wn_stop,
                  solar_flag=False, obs_height=0.0, update_params=True,
                  residual_limit=10, zero_fill_factor=0, model_padding=50,
-                 model_pts_per_cm=100, apod_function='NB_medium', outfile=None,
-                 tolerance=1e-8, output_ppmm_flag=False,
-                 gas_auto_apriori=True):
+                 pts_per_cm=25, apod_function='NB_medium', outfile=None,
+                 tolerance=1e-4, output_ppmm_flag=False):
         """Initialise the Analyser."""
         # Generate the RFM object
         logger.debug('Setting up RFM')
@@ -112,27 +103,19 @@ class Analyser(object):
             model_padding=model_padding,
             solar_flag=solar_flag,
             obs_height=obs_height,
-            model_pts_per_cm=model_pts_per_cm
+            pts_per_cm=pts_per_cm
         )
 
         # Calculate the optical depths
         self.params = self.rfm.calc_optical_depths(params=params)
 
-        # If using the gas apriori, update the parameters
-        if gas_auto_apriori:
-            for gas, par in self.params.items():
-                if par.species is not None and par.vary:
-                    self.params[gas].value = par.original_amt
-                elif par.species is not None and not par.vary:
-                    self.params[gas].value = 0
-
         # Pull the fitted parameters
-        self.p0 = self.params.fittedvalueslist()
+        self.p0 = self.params.get_fit_values_list()
 
         # Store the fit window information
         self.wn_start = float(wn_start)
         self.wn_stop = float(wn_stop)
-        self.model_pts_per_cm = int(model_pts_per_cm)
+        self.pts_per_cm = int(pts_per_cm)
 
         # Store the quality check settings
         self.update_params = update_params
@@ -152,7 +135,7 @@ class Analyser(object):
         # Calculate the model x-grid
         # This includes a 1 cm-1 padding on either side to allow shifts
         npts_cm = int(self.wn_stop - self.wn_start) + model_padding*2
-        self.xgrid_npts = self.model_pts_per_cm*(npts_cm) + 1
+        self.xgrid_npts = self.pts_per_cm*(npts_cm) + 1
         self.model_grid = np.linspace(
             self.wn_start-model_padding,
             self.wn_stop+model_padding,
@@ -160,18 +143,23 @@ class Analyser(object):
         )
 
         # Generate the ILS
-        logger.info('Generating initial ILS')
-        try:
+        ils_flag = np.any([
+            self.params.variables['opd'].vary,
+            self.params.variables['fov'].vary
+        ])
+        if ils_flag:
+            self.regenerate_ils_flag = True
             self.apod_function = apod_function
-            self.make_ils_jf(
-                max_opd=params['opd'].value,
-                fov=params['fov'].value,
-                nper_wn=self.model_pts_per_cm,
+        else:
+            logger.info('Pre-generating initial ILS')
+            self.ils = self.make_ils(
+                max_opd=params.variables['opd'].value,
+                fov=params.variables['fov'].value,
+                nper_wn=self.pts_per_cm,
                 wn=(self.model_grid.max() - self.model_grid.min()) / 2,
-                apod_function=self.apod_function
+                apod_function=apod_function
             )
-        except KeyError:
-            logger.error('Ensure both "opd" and "fov" are defined in params!')
+            self.regenerate_ils_flag = False
 
         # If an output file is defined, create it
         self.outfile = outfile
@@ -189,7 +177,7 @@ class Analyser(object):
                     f'#,StartWavenumber(cm-1),{wn_start}\n'
                     f'#,StopWavenumber(cm-1),{wn_stop}\n'
                     f'#,WavenumberPadding(cm-1),{model_padding}\n'
-                    f'#,PointsPercm,{model_pts_per_cm}\n'
+                    f'#,PointsPercm,{pts_per_cm}\n'
                     f'#,ZeroFillFactor,{zero_fill_factor}\n'
                     f'#,SolarFlag,{solar_flag}\n'
                     f'#,ObserverHeight(m),{obs_height}\n'
@@ -199,36 +187,35 @@ class Analyser(object):
                     f'#,RFM,{rfm_path}\n'
                     f'#,HITRAN,{hitran_path}\n'
                     f'#,GasOutputUnits,{gas_units}\n'
-                    '#,Name,Gas,Temperature(K),Pressure(mb),PathLength(m)\n'
+                    '#,Layer,Temperature(K),Pressure(mb),PathLength(m),Gases\n'
                 )
 
-                # Write gas details
-                for p in params.values():
-                    if p.species is not None:
-                        ofile.write(
-                            f'#,{p.name},{p.species},{p.temp},{p.pres},'
-                            f'{p.path}\n'
-                        )
+                # Write layer details
+                for layer in params.layers.values():
+                    ofile.write(
+                        f'#,{layer.layer_id},{layer.temperature},'
+                        f'{layer.pressure},{layer.path_length},'
+                    )
+                    for gas in layer.gases:
+                        ofile.write(f'{gas}; ')
+                    ofile.write('\n')
 
                 # Write the fit results header
                 ofile.write('Filename,Timestamp')
-                for p in params.values():
-                    ofile.write(f',{p.name},{p.name}_err')
+                for key in params.get_all_parameters():
+                    ofile.write(f',{key},{key}_err')
                 ofile.write(',FitQuality,MaxResidual,StdevResidual\n')
 
-    def fit(self, spectrum, calc_od='all'):
+    def fit(self, spectrum):
         """Fit the provided spectrum.
 
         Parameters
         ---------
         spectrum : xarray.DataArray
             The spectrum to fit. Must be a DataArray with a single coords named
-            Wavenumber and with the following attrs:
+            "wavenumber" and with the following attrs:
                 filename: the spectrum filename
                 timestamp: the spectrum timestamp
-        calc_od : str or list, optional
-            The gas parameters for which to calculate the optical depths. If
-            all, then all gases are calculated. Default is all.
 
         Returns
         -------
@@ -240,13 +227,7 @@ class Analyser(object):
             spectrum = zero_fill(spectrum, self.zero_fill_factor)
 
         # Extract the region we are interested in
-        full_xgrid = spectrum.coords['Wavenumber'].to_numpy()
-        idx = np.logical_and(
-            full_xgrid >= self.wn_start,
-            full_xgrid <= self.wn_stop
-        )
-        self.grid = full_xgrid[idx != 0]
-        self.spec = spectrum.to_numpy()[idx != 0]
+        sub_spec = spectrum.sel(wavenumber=slice(self.wn_start, self.wn_stop))
 
         # Pull the fit bounds
         bounds = self.params.get_bounds()
@@ -254,21 +235,13 @@ class Analyser(object):
         # Perform the fit
         try:
 
-            # p0 = differential_evolution(
-            #     self.fwd_model,
-            #     bounds=np.transpose(bounds)
-            # ).x
-
-            # print(p0)
-
             # Run fit and calculate parameter error
             popt, pcov = curve_fit(
                 self.fwd_model,
-                self.grid,
-                self.spec,
+                sub_spec.wavenumber,
+                sub_spec.to_numpy(),
                 self.p0,
                 bounds=bounds,
-                # xtol=self.tolerance,
                 ftol=self.tolerance
             )
             perr = np.sqrt(np.diag(pcov))
@@ -279,17 +252,19 @@ class Analyser(object):
         except RuntimeError:
             popt = np.full(len(self.p0), np.nan)
             perr = np.full(len(self.p0), np.nan)
+            pcov = np.full((len(self.p0), len(self.p0)), np.nan)
             nerr = 1
 
         # Put the results into a FitResult object
-        fit = FitResult(self, [self.grid, self.spec], popt, pcov, perr, nerr,
-                        self.residual_limit, calc_od)
+        fit = FitResult(
+            self, sub_spec, popt, pcov, perr, nerr, self.residual_limit
+        )
 
         # Update the initial fit parameters
         if self.update_params and not fit.nerr:
             self.p0 = popt
         else:
-            self.p0 = self.params.fittedvalueslist()
+            self.p0 = self.params.get_fit_values_list()
 
         # Write fit results
         if self.outfile is not None:
@@ -299,16 +274,27 @@ class Analyser(object):
                 metadata = spectrum.attrs
                 ofile.write(f'{metadata["filename"]},{metadata["timestamp"]}')
 
-                # Write the fitted values
-                for p in self.params.values():
+                # Write the fitted parameters
+                for param in self.params.get_all_parameters().values():
 
-                    # Check if gases require conversion to ppm.m
-                    if p.species is not None and self.output_ppmm_flag:
-                        val = p.fit_val_to_ppmm()
-                        err = p.fit_err_to_ppmm()
+                    # If it is a gas parameter, convert if neccissary
+                    if param.layer_id is not None:
+                        layer = self.params.layers[param.layer_id]
+                        val = layer.get_fit_value(param.name)
+                        err = layer.get_fit_error(param.name)
+
+                        if self.output_ppmm_flag:
+                            val = molecm2_to_ppmm(
+                                val, layer.temperature, layer.pressure
+                            )
+                            err = molecm2_to_ppmm(
+                                err, layer.temperature, layer.pressure
+                            )
+
+                    # Otherwise just pull the parameter
                     else:
-                        val = p.fit_val
-                        err = p.fit_err
+                        val = param.fit_value
+                        err = param.fit_error
 
                     # Write the fit value and error
                     ofile.write(f',{val},{err}')
@@ -337,38 +323,37 @@ class Analyser(object):
         numpy array
             The fitted model spectrum, interpolated onto the measurement grid
         """
-        # Get dicitionary of fitted parameters
-        p = self.params.valuesdict()
+        # Get dictionary of fitted parameters
+        par_vals = self.params.get_values_dict()
 
         # Update the fitted parameter values with those supplied to the forward
         # model
-        i = 0
-        for par in self.params.values():
-            if par.vary:
-                p[par.name] = p0[i]
-                i += 1
-            else:
-                p[par.name] = par.value
+        for i, key in enumerate(self.params.get_fit_values_dict().keys()):
+            par_vals[key] = p0[i]
 
         # Unpack polynomial parameters
-        bg_poly_coefs = [p[n] for n in p if 'bg_poly' in n]
-        shift_coefs = [p[n] for n in p if 'shift' in n]
-        offset_coefs = [p[n] for n in p if 'offset' in n]
+        bg_poly_coefs = [par_vals[n] for n in par_vals if 'bg_poly' in n]
+        shift_coefs = [par_vals[n] for n in par_vals if 'shift' in n]
+        offset_coefs = [par_vals[n] for n in par_vals if 'offset' in n]
 
         # Construct background polynomial
         bg_poly = np.polyval(np.flip(bg_poly_coefs), self.model_grid)
 
-        # Calculate the gas optical depths
-        od_arr = np.asarray(
-            [par.original_od * p[par.name] for par in self.params.values()
-             if par.species is not None]
+        # Calculate the gas optical depths for each layer
+        layer_ods = np.zeros(
+            [len(self.params.layers), len(self.model_grid)]
         )
+        for n, layer in enumerate(self.params.layers.values()):
+            layer_ods[n] = np.asarray([
+                layer.optical_depths[gas] * par_vals[f'{layer.layer_id}_{gas}']
+                for gas in layer.gases
+            ]).sum(axis=0)
+
+        # Summ to get the total optical depth
+        total_od = np.sum(layer_ods, axis=0)
 
         # Convert to transmission
-        trans_arr = np.exp(-od_arr)
-
-        # Multiply all transmittances
-        total_trans = np.prod(trans_arr, axis=0)
+        total_trans = np.exp(-total_od)
 
         # Multiply by the background
         raw_spec = np.multiply(bg_poly, total_trans)
@@ -378,11 +363,11 @@ class Analyser(object):
         raw_spec = np.add(raw_spec, offset)
 
         # Generate the ILS is any ILS parameters are being fit
-        if self.params['opd'].vary or self.params['fov'].vary:
-            self.make_ils_jf(
-                max_opd=p['opd'],
-                fov=p['fov'],
-                nper_wn=self.model_pts_per_cm,
+        if self.regenerate_ils_flag:
+            self.ils = self.make_ils(
+                max_opd=par_vals['opd'],
+                fov=par_vals['fov'],
+                nper_wn=self.pts_per_cm,
                 wn=(self.model_grid.max() - self.model_grid.min()) / 2,
                 apod_function=self.apod_function
             )
@@ -400,219 +385,8 @@ class Analyser(object):
 
         return interp_spec
 
-    def _make_ils_old(self, optical_path_diff, fov, apod_function='NB_medium'):
-        """Generate the ILS to use in the fit."""
-        # Define the total optical path difference as the sampling frequency
-        total_opd = self.model_pts_per_cm
-
-        # Convert fov from milliradians to radians
-        fov = fov / 1000
-
-        # Define the total number of points in the ftir igm
-        total_igm_npts = int(total_opd * self.model_pts_per_cm)
-        ftir_igm_npts = int(optical_path_diff * self.model_pts_per_cm)
-        filler_igm_npts = int(total_igm_npts - ftir_igm_npts)
-
-        # Calculate the FTIR IGM grid
-        ftir_igm_grid = optical_path_diff * \
-            np.arange(ftir_igm_npts) / (ftir_igm_npts - 1)
-
-        # Initialise interferograms
-        ftir_igm = np.zeros(ftir_igm_npts)
-        filler_igm = np.zeros(filler_igm_npts)
-
-        # If using a triangular apod function, then generate
-        if apod_function == 'triangular':
-            ftir_igm = np.flip(np.arange(total_igm_npts) / (total_igm_npts-1))
-            igm = np.concatenate(ftir_igm, filler_igm)
-
-        # Otherwise compute the boxcar/NB function
-        elif apod_function in ['boxcar', 'NB_weak', 'NB_medium', 'NB_strong']:
-
-            # Define apodisation parameters depending on the function
-            apod_param_dict = {
-                'boxcar':     [1.0,       0.0,      0.0,      0.0],
-                'NB_weak':    [0.348093, -0.087577, 0.703484, 0.0],
-                'NB_medium':  [0.152442, -0.136176, 0.983734, 0.0],
-                'NB_strong':  [0.045335,  0.0,      0.554883, 0.399782]
-            }
-
-            c = apod_param_dict[apod_function]
-
-            for i in range(4):
-                ftir_igm += c[i] * (
-                    (1 - (ftir_igm_grid / optical_path_diff)**2)**i
-                )
-            igm = np.concatenate([ftir_igm, filler_igm])
-
-        else:
-            logger.error('Apodisation function not recognised!')
-            raise ValueError
-
-        # FFT the interferogram to length space
-        spc = fft.ifft(igm).real
-
-        n2 = int(total_igm_npts / 2)
-        spc1 = spc[:n2]
-        spc2 = spc[n2:]
-        spc = np.concatenate([spc2, spc1])
-
-        # Remove the offset
-        spc = spc - np.min(spc)
-
-        # Apply the FOV affect, like a boxcar in freq space with
-        # width = wavenumber * (1 - cos(fov / 2))
-        fov_width = self.wn_start * (1 - np.cos(fov / 2))
-
-        # Calculate the smoothing factor in number of points
-        fov_smooth_factor = int(self.model_pts_per_cm * fov_width)
-
-        # Catch bad smooth factors
-        if fov_smooth_factor <= 0 or fov_smooth_factor > n2:
-            fov_smooth_factor = 5
-
-        # Smooth the spc
-        w = np.ones(fov_smooth_factor)
-        spc_fov = np.convolve(spc, w, mode='same')
-
-        # Select the middle, +/- 5 wavenumbers and normalise
-        k_size = 5 * self.model_pts_per_cm
-        kernel = spc_fov[n2-k_size:n2+k_size]
-        norm_kernel = kernel/np.nansum(kernel)
-
-        self.ils = norm_kernel
-
-        return norm_kernel
-
-    def _make_ils(self, opd, fov, apod_function='NB_medium'):
-        """."""
-        # Make a the apodisation function grid 10 cm-1 wide
-        npts = 20*self.model_pts_per_cm + 1
-        grid = np.linspace(-10, 10, npts)
-
-        # Pull the apodisation parameters
-        c_params = self.apod_param_dict[apod_function]
-
-        # Compute the apodisation function
-        apod = np.sum(
-            [c * ((1 - (grid / opd)**2))**i for i, c in enumerate(c_params)],
-            axis=0
-        )
-
-        # Apply fourier transform to frequency space
-        apod_func = fft.ifft(apod).real
-
-        # Mirror around 0
-        n = npts // 2
-        apod_func = np.concatenate([apod_func[n:], apod_func[:n]])
-
-        # Apply the FOV affect, like a boxcar in freq space with
-        # width = wavenumber * (1 - cos(fov / 2))
-        av_wn = (self.wn_stop + self.wn_start) / 2
-        fov_width = av_wn * (1 - np.cos(fov/1000 / 2))
-
-        # Compute the fov boxhat function
-        fov_box = np.zeros(npts)
-        fov_box[np.abs(grid) < fov_width] = 1
-
-        ils = np.convolve(apod_func, fov_box, mode='same')
-
-        # Normalise the ILS
-        norm_ils = np.divide(ils, np.sum(ils))
-
-        self.ils = norm_ils
-
-        return norm_ils
-
-    def _make_ils_new(self, opd, fov, apod_function='NB_medium'):
-        """."""
-        # Convert fov from milliradians to radians
-        fov = fov / 1000
-
-        # --------------- DEFINE STARTING PARAMETERS  ---------------------
-        # Define the total OPD as [in cm] the sampling frequency
-        n_per_wave = self.model_pts_per_cm
-        total_opd = n_per_wave
-
-        # Set the number of points in the interferograms (IGM)
-        # Total IGM
-        n_total_igm = int(total_opd * n_per_wave)
-
-        # FTIR IGM
-        n_ftir_igm = int(opd * n_per_wave)
-
-        # Filler IGM (difference between the two)
-        n_filler_igm = int(n_total_igm - n_ftir_igm)
-
-        # Create the IGM grids (in cm)
-        # total_igm_grid = np.linspace(0, total_opd, n_ftir_igm)
-        ftir_igm_grid = np.linspace(0, opd, n_ftir_igm)
-
-        # Create empty IGM arrays
-        ftir_igm = np.zeros(n_ftir_igm)
-        filler_igm = np.zeros(n_filler_igm)
-
-        # ---------------------- GENERATE THE IGMS ------------------------
-        # Get the apod parameters
-        c = self.apod_param_dict[apod_function]
-
-        # Now build
-        for i in range(4):
-            add_igm = c[i] * ((1 - (ftir_igm_grid / opd) ** 2)) ** i
-            ftir_igm = ftir_igm + add_igm
-
-        # Fill the rest of the signal with zeros
-        igm = np.concatenate((ftir_igm, filler_igm))
-
-        # ---------------------- RECONSTRUCT KERNEL ------------------------
-        # Apply Fourier Transform to reconstruct spectrum
-        spc = np.fft.fft(igm).real
-
-        # Split the spectrum in the middle and mirror around axis
-        # Find middle point
-        middle = n_total_igm // 2
-
-        # Beginning of the signal is the tapering edge
-        # (right side of the kernel)
-        spc_right = spc[0:middle]
-
-        # End of the signal is the rising edge (left side of the kernel)
-        spc_left = spc[middle:]
-
-        # Reconstruct spectrum around the middle point
-        spc = np.concatenate((spc_left, spc_right))
-
-        # Remove offset in spectrum
-        offset = spc[0:middle//2].mean(axis=0)
-        spc = spc - offset
-
-        # FOV effect is like a boxcar in freq space
-        fov_width = self.wn_start * (1 - np.cos(fov/2))      # in [cm^-1]
-        shift = self.wn_start * (1 - np.cos(fov/2)) * 0.5    # in [cm^-1]
-        n_box = int(np.ceil(fov_width * n_per_wave))
-        if n_box < 0 or n_box > middle:
-            n_box = 5
-        boxcar = np.ones(n_box) * 1 / n_box
-        spc_fov = np.convolve(spc, boxcar, 'same')
-        spc_fov = spc_fov / spc_fov.sum()
-
-        # Create the wavenumber grid centred on zero
-        wave = np.linspace(-total_opd / 2, total_opd / 2, n_total_igm)
-
-        # select the middle +/- 5 wavenumbers
-        # (minimum window size is then 10 cm^-1)
-        start = int(middle - 5 * n_per_wave)
-        stop = int(middle + 5 * n_per_wave)
-        kernel = spc_fov[start:stop]
-        kernel = kernel / kernel.sum(axis=0)
-        grid = wave[start:stop]
-
-        self.ils = kernel
-
-        return kernel
-
-    def make_ils_jf(self, max_opd=1.8, fov=30, nper_wn=25, wn=1000,
-                    apod_function='NB medium'):
+    def make_ils(self, max_opd=1.8, fov=30, nper_wn=25, wn=1000,
+                 apod_function='NB medium'):
 
         # Relabel variables
         L = max_opd
@@ -713,15 +487,18 @@ class Analyser(object):
         wn_grid = wn_grid[idx]
         kernel = kernel[idx]
 
-        self.ils = kernel
-
         return kernel
+
+
+def molecm2_to_ppmm(value, temperature, pressure):
+    """Convert value in molecules/cm2 to ppmm using temperature and pressure."""
+    return value * temperature / (7.243e14 * pressure)
 
 
 def zero_fill(spectrum, zero_fill_factor):
     """Zero-fill the provided spectrum to increase the sampling."""
     # Unpack the x and  data from the spectrum
-    grid = spectrum.coords['Wavenumber'].to_numpy()
+    grid = spectrum.coords['wavenumber'].to_numpy()
     spec = spectrum.to_numpy()
 
     # Calculate fast_npts, the first 2^x after npts
@@ -743,7 +520,7 @@ def zero_fill(spectrum, zero_fill_factor):
     # Form the output DataArray
     filled_spectrum = xr.DataArray(
         data=norm_filled_spec,
-        coords={'Wavenumber': filled_grid},
+        coords={'wavenumber': filled_grid},
         attrs=spectrum.attrs
     )
 
@@ -769,9 +546,6 @@ class FitResult(object):
         The error flag. 0 = no error, 1 = fit failed.
     residual_limit : float
         The maximum fit residual to allow a "good" fit
-    calc_od : str or list
-        The gas parameters for which to calculate the optical depths. If all,
-        then all gases are calculated.
 
     Methods
     -------
@@ -795,47 +569,58 @@ class FitResult(object):
     """
 
     def __init__(self, analyser, spectrum, popt, pcov, perr, nerr,
-                 residual_limit, calc_od):
+                 residual_limit):
         """Initialise the FItResult."""
 
         self.analyser = analyser
         self.params = analyser.params
 
-        grid, spec = spectrum
-        coords = {'wavenumber': grid}
+        coords = spectrum.coords
 
-        data_vars = {'spectrum': xr.DataArray(data=spec, coords=coords)}
+        data_vars = {'spectrum': spectrum}
         self.popt = popt
         self.pcov = pcov
         self.perr = perr
         self.nerr = nerr
 
-        # Add the fit results to each parameter
-        i = 0
-        for par in self.params.values():
+        # Get dictionary of fitted parameters
+        popt_dict = {
+            key: popt[i]
+            for i, key in enumerate(self.params.get_fit_values_dict())
+        }
+        perr_dict = {
+            key: perr[i]
+            for i, key in enumerate(self.params.get_fit_values_dict())
+        }
 
-            if par.vary:
-                par.fit_val = self.popt[i]
-                par.fit_err = self.perr[i]
-                i += 1
-            else:
-                par.fit_val = par.value
-                par.fit_err = 0
+        # Add the fit results to each parameter, starting with layers
+        for layer in self.params.layers.values():
+            for gas in layer.gases:
+                key = f'{layer.layer_id}_{gas}'
+                if key in popt_dict:
+                    layer.gases[gas].fit_value = popt_dict[key]
+                    layer.gases[gas].fit_error = perr_dict[key]
+
+        # And repeat for other parameters
+        for key in self.params.variables:
+            if key in popt_dict:
+                self.params.variables[key].fit_value = popt_dict[key]
+                self.params.variables[key].fit_error = perr_dict[key]
 
         # If the fit is successful then calculate the fit and residual
         if not self.nerr:
 
             # Generate the fit spectrum
-            fit = analyser.fwd_model(grid, *self.popt)
+            fit = analyser.fwd_model(spectrum.wavenumber, *self.popt)
             data_vars['fit'] = xr.DataArray(data=fit, coords=coords)
 
             # Calculate the residual
-            resid = (spec - fit)/spec * 100
+            resid = (spectrum - fit)/spectrum * 100
             data_vars['residual'] = xr.DataArray(data=resid, coords=coords)
 
             # Calculate max residual value
             fit_qual_flag = np.nanmax(
-                np.abs((spec - fit) / max(spec) * 100)
+                np.abs((spectrum - fit) / max(spectrum) * 100)
             ) > residual_limit
 
             # Check the fit quality
@@ -845,47 +630,43 @@ class FitResult(object):
 
             # Calculate the background polynomial
             bg_poly = np.polyval(
-                np.flip(
-                    [p.fit_val for p in self.params.values()
-                     if 'bg_poly' in p.name]
-                ),
-                grid
+                np.flip([
+                    p.fit_value for p in self.params.variables.values()
+                    if 'bg_poly' in p.name
+                ]),
+                spectrum.wavenumber
             )
             data_vars['bg_poly'] = xr.DataArray(data=bg_poly, coords=coords)
 
             # Calculate the intensity offset
-            offset_polyvars = np.flip(
-                [p.fit_val for p in self.params.values() if 'offset' in p.name]
-            )
+            offset_polyvars = np.flip([
+                p.fit_value for p in self.params.variables.values()
+                if 'offset' in p.name
+            ])
             if len(offset_polyvars) > 0:
-                offset = np.polyval(offset_polyvars, grid)
+                offset = np.polyval(offset_polyvars, spectrum.wavenumber)
             else:
-                offset = np.full(len(spec), np.nan)
+                offset = np.full(len(spectrum), np.nan)
             data_vars['offset'] = xr.DataArray(data=offset, coords=coords)
 
             # Calculate optical depth spectra
-            if calc_od == 'all':
-                calc_od = [
-                    par.name for par in self.params.values()
-                    if par.species is not None
-                ]
+            for key, layer in self.params.layers.items():
+                for gas in layer.gases.values():
+                    meas_od, fit_od = self._calc_od(spectrum, gas, layer)
 
-            for par in calc_od:
-                if par in self.params:
-                    meas_od, fit_od = self._calc_od(grid, spec, par)
-                    data_vars[f'{par}_measured_od'] = xr.DataArray(
+                    data_vars[f'{key}_{gas}_measured_od'] = xr.DataArray(
                         data=meas_od, coords=coords
                     )
-                    data_vars[f'{par}_fitted_od'] = xr.DataArray(
+                    data_vars[f'{key}_{gas}_fitted_od'] = xr.DataArray(
                         data=fit_od, coords=coords,
-                        attrs={'value': self.params[par].fit_val}
+                        attrs={'value': gas.fit_value}
                     )
 
         # If not then return nans
         else:
             logger.warn('Fit failed!')
             nan_array = xr.DataArray(
-                data=np.full(len(self.spec), np.nan), coords=coords
+                data=np.full(len(spectrum), np.nan), coords=coords
             )
             data_vars = {
                 **data_vars,
@@ -894,60 +675,61 @@ class FitResult(object):
                 'bg_poly': nan_array,
                 'offset': nan_array
             }
-            for par in calc_od:
-                if par in self.params:
-                    data_vars[f'{par}_measured_od'] = xr.DataArray(
+            for key, layer in self.params.layers.items():
+                for gas in layer.gases.values():
+                    data_vars[f'{key}_{gas}_measured_od'] = xr.DataArray(
                         data=nan_array, coords=coords
                     )
-                    data_vars[f'{par}_fitted_od'] = xr.DataArray(
+                    data_vars[f'{key}_{gas}_fitted_od'] = xr.DataArray(
                         data=nan_array, coords=coords,
-                        attrs={'value': self.params[par].fit_val}
+                        attrs={'value': gas.fit_value}
                     )
 
         self.data = xr.Dataset(data_vars=data_vars)
 
-    def _calc_od(self, grid, spec, par_name):
+    def _calc_od(self, spectrum, gas, layer):
         """Calculate the given gas optical depth spectrum."""
-        # Make a copy of the parameters to use in the OD calculation
-        params = self.params.make_copy()
+        # Get a dictionary of the fit results
+        popt_dict = self.params.get_popt_dict()
 
         # Set the parameter and any offset coefficients to zero
-        params[par_name].fit_val = 0
-        for par in params:
-            if 'offset' in par:
-                params[par].fit_val = 0
+        par_name = f'{layer.layer_id}_{gas.name}'
+        popt_dict[par_name] = 0
+        for key in popt_dict.keys():
+            if 'offset' in key:
+                popt_dict[key] = 0
+
+        # Get a list of param values
+        popt_list = [val for val in popt_dict.values()]
 
         # Calculate the fit without the parameter
-        fit_params = params.popt_list()
-        p = self.params.popt_dict()
-        fit = self.analyser.fwd_model(grid, *fit_params)
+        fit = self.analyser.fwd_model(spectrum.wavenumber, *popt_list)
 
         # Calculate the shifted model grid
-        shift_coefs = [p[n] for n in p if 'shift' in n]
+        shift_coefs = [popt_dict[n] for n in popt_dict if 'shift' in n]
         zero_grid = self.analyser.model_grid - min(self.analyser.model_grid)
         wl_shift = np.polyval(np.flip(shift_coefs), zero_grid)
         shift_model_grid = np.add(self.analyser.model_grid, wl_shift)
 
         # Calculate the intensity offset
-        offset_coefs = [p[n] for n in p if 'offset' in n]
+        offset_coefs = [popt_dict[n] for n in popt_dict if 'offset' in n]
         offset = np.polyval(np.flip(offset_coefs), self.analyser.model_grid)
         offset = griddata(
-            shift_model_grid, offset, grid, method='cubic'
+            shift_model_grid, offset, spectrum.wavenumber, method='cubic'
         )
 
         # Calculate the parameter od
         par_od = np.multiply(
-            self.params[par_name].xsec_od,
-            self.params[par_name].fit_val
+            layer.optical_depths[gas.name], layer.gases[gas.name].fit_value
         )
 
         # Convolve with the ILS and interpolate onto the measurement grid
         par_T = np.exp(-par_od)
         ils_par_T = np.convolve(par_T, self.analyser.ils, mode='same')
         ils_par_od = -np.log(ils_par_T)
-        par_od = griddata(shift_model_grid, ils_par_od, grid)
+        par_od = griddata(shift_model_grid, ils_par_od, spectrum.wavenumber)
 
-        meas_od = -np.log(np.divide(spec-offset, fit))
+        meas_od = -np.log(np.divide(spectrum-offset, fit))
         fit_od = par_od
 
         return meas_od, fit_od

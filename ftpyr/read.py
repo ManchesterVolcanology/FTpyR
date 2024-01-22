@@ -192,7 +192,7 @@ def read_spc(filename):
     # Form the output DataArray
     spectrum = xr.DataArray(
         data=ydata,
-        coords={'Wavenumber': xdata},
+        coords={'wavenumber': xdata},
         attrs=metadata
     )
 
@@ -243,7 +243,7 @@ def read_spectacle(filename):
     # Form the output DataArray
     spectrum = xr.DataArray(
         data=ydata,
-        coords={'Wavenumber': xdata},
+        coords={'wavenumber': xdata},
         attrs=metadata
     )
 
@@ -277,7 +277,7 @@ def read_ascii(filename):
 
     spectrum = xr.DataArray(
         data=ydata,
-        coords={'Wavenumber': xdata},
+        coords={'wavenumber': xdata},
         attrs=metadata
     )
 

@@ -1,255 +1,353 @@
 import copy
 import logging
 import numpy as np
-from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
 
 
-class Parameters(OrderedDict):
-    """."""
+class Parameters(object):
+    """
+    Parameters class to hold fitting parameters in least squares minimisation.
+    """
 
-    def __init__(self, *args, **kwargs):
-        self.update(*args, **kwargs)
+    def __init__(self):
+        self.layers = {}
+        self.variables = {}
 
-    def add(self, name, value=0.0, vary=True, species=None, path=None,
-            pres=None, temp=None, lo_bound=-np.inf, hi_bound=np.inf):
-        """."""
-        self.__setitem__(
-            name,
-            Parameter(
-                name=name, value=value, vary=vary, species=species, path=path,
-                pres=pres, temp=temp, lo_bound=lo_bound, hi_bound=hi_bound
-            )
+    def add(self, name, value=0.0, vary=True, bounds=[-np.inf, np.inf]):
+        """Add a Parameter.
+
+        Parameters
+        ----------
+        name : string
+            Parameter unique ID string.
+        value : float, optional
+            Initial value for the parameter. Used as a priori estimate in fit,
+            by default 0.0
+        vary : bool, optional
+            If True, then the parameter is fitted, otherwise it is fixed to
+            value, by default True
+        bounds : list, optional
+            Lower and upper bounds for the parameter to be passed to the
+            minimisation algorithm, by default [-np.inf, np.inf]
+        """
+        self.variables[name] = Parameter(
+            name=name, value=value, vary=vary, bounds=bounds
         )
 
-    def extract_gases(self, layer_key=None):
-        """Return only gas parameters based on layer key."""
-        if layer_key is not None:
-            return OrderedDict(
-                (k, v) for [k, v] in self.items()
-                if v.species is not None and v.layer == layer_key
-            )
-        else:
-            return OrderedDict(
-                (k, v) for [k, v] in self.items()
-                if v.species is not None
-            )
+    def add_layer(self, layer):
+        """Add a layer to the Paramaters.
 
-    def valuesdict(self):
-        """Return an ordered dictionary of all parameter values."""
-        return OrderedDict((p.name, p.value) for p in self.values())
+        Parameters
+        ----------
+        layer : Layer object
+            Layer to add.
 
-    def fittedvaluesdict(self):
-        """Return an ordered dictionary of fitted parameter values."""
-        return OrderedDict((p.name, p.value) for p in self.values() if p.vary)
+        Raises
+        ------
+        ValueError
+            Raises if multiples of the same layer ID are added
+        """
+        if layer.layer_id in self.layers:
+            raise ValueError('Cannot have multiple layers with the same ID!')
+        self.layers[layer.layer_id] = layer
 
-    def popt_dict(self):
-        """Return a dictionary of the optimised parameters."""
-        return OrderedDict((p.name, p.fit_val)
-                           for p in self.values() if p.vary)
-
-    def valueslist(self):
-        """Return a list of all parameter values."""
-        return [(p.value) for p in self.values()]
-
-    def fittedvalueslist(self):
+    def get_fit_values_list(self):
         """Return a list of the fitted parameter values."""
-        return [(p.value) for p in self.values() if p.vary]
+        vals_list = []
+        for layer in self.layers.values():
+            vals_list += [gas.value for gas in layer.gases.values() if gas.vary]
 
-    def popt_list(self):
+        vals_list += [(p.value) for p in self.variables.values() if p.vary]
+
+        return vals_list
+
+    def get_values_list(self):
+        """Return a list of all parameter values."""
+        vals_list = []
+        for layer in self.layers.values():
+            vals_list += [gas.value for gas in layer.gases.values()]
+
+        vals_list += [(p.value) for p in self.variables.values()]
+
+        return vals_list
+
+    def get_fit_values_dict(self):
+        """Return a dictionary of the fitted parameter values."""
+        vals_dict = {}
+        for layer in self.layers.values():
+            for key, gas in layer.gases.items():
+                if gas.vary:
+                    vals_dict[f'{layer.layer_id}_{key}'] = gas.value
+
+        for key, param in self.variables.items():
+            if param.vary:
+                vals_dict[key] = param.value
+
+        return vals_dict
+
+    def get_values_dict(self):
+        """Return a dictionary of all parameter values."""
+        vals_dict = {}
+        for layer in self.layers.values():
+            for key, gas in layer.gases.items():
+                vals_dict[f'{layer.layer_id}_{key}'] = gas.value
+
+        for key, param in self.variables.items():
+            vals_dict[key] = param.value
+
+        return vals_dict
+
+    def get_popt_dict(self):
+        """Return a dictionary of the optimised parameters."""
+        popt_dict = {}
+        for layer in self.layers.values():
+            for key, gas in layer.gases.items():
+                if gas.vary:
+                    popt_dict[f'{layer.layer_id}_{key}'] = gas.fit_value
+
+        for key, param in self.variables.items():
+            if param.vary:
+                popt_dict[key] = param.fit_value
+
+        return popt_dict
+
+    def get_popt_list(self):
         """Return a list of the optimised parameters."""
-        return [(p.fit_val) for p in self.values() if p.vary]
+        vals_list = []
+        for layer in self.layers.values():
+            vals_list += [
+                gas.fit_value for gas in layer.gases.values() if gas.vary
+            ]
+
+        vals_list += [(p.fit_value) for p in self.variables.values() if p.vary]
+
+        return vals_list
+
+    def get_all_parameters(self):
+        """Get a dictionary of all parameters."""
+        params_dict = {}
+        for layer in self.layers.values():
+            for key, gas in layer.gases.items():
+                params_dict[f'{layer.layer_id}_{key}'] = gas
+
+        for key, param in self.variables.items():
+            params_dict[key] = param
+
+        return params_dict
 
     def get_bounds(self):
         """Return a list of parameter bounds."""
-        return [
-            [p.lo_bound for p in self.values() if p.vary],
-            [p.hi_bound for p in self.values() if p.vary]
-        ]
+        lo_bounds = []
+        hi_bounds = []
+
+        for layer in self.layers.values():
+            lo_bounds += [
+                gas.bounds[0] for gas in layer.gases.values() if gas.vary
+            ]
+            hi_bounds += [
+                gas.bounds[1] for gas in layer.gases.values() if gas.vary
+            ]
+
+        lo_bounds += [(p.bounds[0]) for p in self.variables.values() if p.vary]
+        hi_bounds += [(p.bounds[1]) for p in self.variables.values() if p.vary]
+
+        return [lo_bounds, hi_bounds]
 
     def make_copy(self):
         """Return a deep copy of the Parameters object."""
         return copy.deepcopy(self)
 
-    def pretty_print(self, mincolwidth=10, precision=4, cols='basic'):
-        """Print the parameters in a nice way.
+    def __repr__(self) -> str:
+        """Nice printing."""
 
-        Parameters
-        ----------
-        mincolwidth : int, optional
-            Minimum width of the columns. Default is 7
-        precision : int, optional
-            Number of significant figures to print to. Default is 4
-        cols : str or list, optional
-            The columns to be printed. Either "all" for all columns, "basic"
-            for the name, value and if it is fixed or a list of the desired
-            column names. Default is "basic"
+        msg = 'FTpyR Parameters object:'
 
-        Returns
-        -------
-        msg : str
-            The formatted message to print
-        """
-        # Set default column choices
-        def_cols = {
-            'all': [
-                'name', 'value', 'vary', 'species', 'temp', 'pres', 'path',
-                'fit_val', 'fit_err', 'lo_bound', 'hi_bound'
-            ],
-            'basic': ['name', 'value', 'vary', 'lo_bound', 'hi_bound']
-        }
+        # Add layer information
+        for layer in self.layers.values():
+            msg += f'\n{layer.layer_id} layer:'
+            msg += f'\n    Temperature: {layer.temperature} K (fixed)'
+            msg += f'\n    Pressure: {layer.pressure} mb (fixed)'
+            msg += f'\n    Path Length: {layer.path_length} m (fixed)'
 
-        # Make list of columns
-        if cols == 'all' or cols == 'basic':
-            cols = def_cols[cols]
+            # Add layer gases
+            for gas in layer.gases.values():
+                msg += f'\n    {gas.name}: {layer.get_value(gas.name):.4g}'
+                if gas.vary:
+                    bounds = layer.get_bounds(gas.name)
+                    msg += f' (free [{bounds[0]} / {bounds[1]}])'
+                else:
+                    msg += ' (fixed)'
 
-        colwidth = np.zeros(len(cols))
+                if not np.isnan(gas.fit_value):
+                    fit_value = layer.get_fit_value(gas.name)
+                    fit_error = layer.get_fit_error(gas.name)
+                    msg += f' -> {fit_value:.4g} (± {fit_error:.4g})'
 
-        if 'name' in cols:
-            i = cols.index('name')
-            colwidth[i] = max([len(name) for name in self]) + 2
+        # Add other parameters
+        msg += '\nOther Parameters:'
+        for key, param in self.variables.items():
+            msg += f'\n    {key}: {param.value}'
+            if param.vary:
+                msg += f' (free [{param.bounds[0]} / {param.bounds[1]}])'
+            else:
+                msg += ' (fixed)'
 
-        if 'value' in cols:
-            i = cols.index('value')
-            colwidth[i] = max(
-                [len(f'{p.value:.{precision}g}') for p in self.values()]
-            ) + 2
+            if not np.isnan(param.fit_value):
+                msg += f' -> {param.fit_value:.4g} (± {param.fit_error:.4g})'
 
-        if 'vary' in cols:
-            i = cols.index('vary')
-            colwidth[i] = mincolwidth
-
-        if 'lo_bound' in cols:
-            i = cols.index('lo_bound')
-            colwidth[i] = max(
-                [len(f'{p.lo_bound:.{precision}g}') for p in self.values()]
-            ) + 2
-
-        if 'hi_bound' in cols:
-            i = cols.index('hi_bound')
-            colwidth[i] = max(
-                [len(f'{p.hi_bound:.{precision}g}') for p in self.values()]
-            ) + 2
-
-        if 'species' in cols:
-            i = cols.index('species')
-            colwidth[i] = max([len(str(p.species)) for p in self.values()]) + 2
-
-        if 'temp' in cols:
-            i = cols.index('temp')
-            colwidth[i] = max([len(f'{p.temp:.{precision}g}')
-                               for p in self.values()]) + 2
-
-        if 'pres' in cols:
-            i = cols.index('pres')
-            colwidth[i] = max(
-                [len(f'{p.pres:.{precision}g}') for p in self.values()]
-            ) + 2
-
-        if 'path' in cols:
-            i = cols.index('path')
-            colwidth[i] = max(
-                [len(f'{p.path:.{precision}g}') for p in self.values()]
-            ) + 2
-
-        if 'fit_val' in cols:
-            i = cols.index('fit_val')
-            colwidth[i] = max(
-                [len(f'{p.fit_val:.{precision}g}') for p in self.values()]
-            ) + 2
-
-        if 'fit_err' in cols:
-            i = cols.index('fit_err')
-            colwidth[i] = max(
-                [len(f'{p.fit_err:.{precision}g}') for p in self.values()]
-            ) + 2
-
-        # Make sure no widths are below the minimum
-        colwidth = [
-            int(mincolwidth) if colwidth[i] < mincolwidth
-            else int(colwidth[i]) for i in range(len(cols))
-        ]
-
-        # Generate the title string
-        title = ''
-        for n, c in enumerate(cols):
-            title += f'|{c:^{colwidth[n]}}'
-        title += '|'
-
-        # Generate the header row
-        msg = f'\n{"MODEL PARAMETERS":^{len(title)}}\n{title}\n' + \
-              f'{"-"*len(title)}\n'
-
-        # Write a row for each parameter
-        for name, p in self.items():
-            d = {
-                'name': f'{p.name}',
-                'value': f'{p.value:.{precision}g}',
-                'vary': f'{p.vary}',
-                'lo_bound': f'{p.lo_bound:.{precision}g}',
-                'hi_bound': f'{p.hi_bound:.{precision}g}',
-                'species': f'{p.species}',
-                'temp': f'{p.temp:.{precision}g}',
-                'pres': f'{p.pres:.{precision}g}',
-                'path': f'{p.path:.{precision}g}',
-                'fit_val': f'{p.fit_val:.{precision}g}',
-                'fit_err': f'{p.fit_err:.{precision}g}'
-             }
-
-            for col in cols:
-                msg += f'|{d[col]:^{colwidth[cols.index(col)]}}'
-
-            msg += '|\n'
-
-        return(msg)
+        return msg
 
 
 class Parameter(object):
-    """."""
+    """Individual parameter class."""
 
-    def __init__(self, name, value, vary=True, species=None, path=None,
-                 pres=None, temp=None, lo_bound=-np.inf, hi_bound=np.inf):
-        """."""
+    def __init__(self, name, value, vary=True, bounds=[-np.inf, np.inf],
+                 layer_id=None):
+        """Initialise object
+
+        Parameters
+        ----------
+        name : string
+            Unique id string for the parameter.
+        value : float
+            Initial value for the parameter. Used as a priori estimate in fit.
+        vary : bool, optional
+            If True, then the parameter is fitted, otherwise it is fixed to
+            value, by default True
+        bounds : list, optional
+            Lower and upper bounds for the parameter to be passed to the
+            minimisation algorithm, by default [-np.inf, np.inf]
+        """
         self.name = str(name)
         self.value = float(value)
         self.vary = bool(vary)
-        self.lo_bound = lo_bound
-        self.hi_bound = hi_bound
-        if species is not None:
-            self.species = str(species)
-            self.path = float(path)
-            self.pres = float(pres)
-            self.temp = float(temp)
-            self.original_od = None
-            self.original_amt = None
-            self.xsec_od = None
-        else:
-            self.species = None
-            self.temp = np.nan
-            self.pres = np.nan
-            self.path = np.nan
+        self.bounds = bounds
+        self.layer_id = layer_id
+        self.fit_value = np.nan
+        self.fit_error = np.nan
 
-        self.fit_val = np.nan
-        self.fit_err = np.nan
+    def __repr__(self):
+        """Nice printing behaviour."""
+        msg = f'{self.name}'
+        if self.layer_id is not None:
+            msg += f' ({self.layer_id})'
 
-    def value_to_ppmm(self):
-        """Return the initial value in ppm.m."""
-        if self.species is not None:
-            return self.value * self.temp / (7.243e14 * self.pres)
-        else:
-            logger.warning(f'{self.name} parameter is not a gas!')
+        msg += f': {self.value:.4g}'
 
-    def fit_val_to_ppmm(self):
-        """Return the fit value in ppm.m."""
-        if self.species is not None:
-            return self.fit_val * self.temp / (7.243e14 * self.pres)
+        if self.vary:
+            msg += f' (free [{self.bounds[0]} / {self.bounds[1]}])'
         else:
-            logger.warning(f'{self.name} parameter is not a gas!')
+            msg += ' (fixed)'
 
-    def fit_err_to_ppmm(self):
-        """Return the fit error in ppm.m."""
-        if self.species is not None:
-            return self.fit_err * self.temp / (7.243e14 * self.pres)
+        if not np.isnan(self.fit_value):
+            msg += f' -> {self.fit_value:.4g} (± {self.fit_error:.4g})'
+
+        return msg
+
+
+class Layer(object):
+    """Layer class to hold settings for individual atmospheric layers."""
+
+    def __init__(self, layer_id, temperature=293.15, pressure=1013.25,
+                 path_length=100, atmos_flag=False):
+        """Initialise the object.
+
+        Parameters
+        ----------
+        layer_id : string
+            Unique ID string for the layer
+        temperature : float, optional
+            Layer temperature (in degrees K), by default 293.15
+        pressure : float, optional
+            Layer pressure (in millibars), by default 1013.25
+        path_length : int, optional
+            Layer path length (in meters), by default 100
+        atmos_flag : bool, optional
+            If True, then sets up a whole atmosphere layer (for use in solar
+            occultation measurements), by default False
+        """
+
+        self.gases = {}
+        self.optical_depths = {}
+        self.path_amounts = {}
+
+        self.layer_id = layer_id
+        self.atmos_flag = atmos_flag
+
+        if not atmos_flag:
+            self.temperature = temperature
+            self.pressure = pressure
+            self.path_length = path_length
         else:
-            logger.warning(f'{self.name} parameter is not a gas!')
+            raise Exception('Whole atmosphere layers not setup yet!')
+
+    def add_gas(self, species, value=1.0, vary=True, bounds=[-np.inf, np.inf]):
+        """Add a gas to the layer.
+
+        Parameters
+        ----------
+        species : string
+            The species name (must match those used in RFM, e.g. H2O, SO2...)
+        value : float, optional
+            The initial value to fit, by default 1.0. Note that this is a
+            multiple of the path amount computed by RFM, not the absolute path
+            amount (for computational stability).
+        vary : bool, optional
+            If True, then the gas amount is varied from value, by default True
+        bounds : list, optional
+            Lower and upper bounds on the fit value, by default
+            [-np.inf, np.inf]
+
+        Raises
+        ------
+        ValueError
+            Raises if multiples of the same species are added to the same layer
+        """
+        if species in self.gases:
+            raise ValueError(f'Layer already contains {species}!')
+        self.gases[species] = Parameter(
+            name=species, value=value, vary=vary, bounds=bounds,
+            layer_id=self.layer_id
+        )
+
+    def get_value(self, gas):
+        """Return the scaled gas initial amount."""
+        try:
+            return self.gases[gas].value * self.path_amounts[gas]
+        except KeyError:
+            return self.gases[gas].value
+
+    def get_bounds(self, gas):
+        """Return the scaled gas bounds."""
+        try:
+            return np.multiply(self.gases[gas].bounds, self.path_amounts[gas])
+        except KeyError:
+            return self.gases[gas].bounds
+
+    def get_fit_value(self, gas):
+        """Return the scaled gas fitted amount."""
+        try:
+            return self.gases[gas].fit_value * self.path_amounts[gas]
+        except KeyError:
+            return self.gases[gas].fit_value
+
+    def get_fit_error(self, gas):
+        """Return the scaled gas fitted amount."""
+        try:
+            return self.gases[gas].fit_error * self.path_amounts[gas]
+        except KeyError:
+            self.gases[gas].fit_error
+
+    def __repr__(self):
+        """Nice printing behaviour."""
+        output = str(
+            f'Layer "{self.layer_id}": '
+            f'Temperature = {self.temperature} K, '
+            f'Pressure = {self.pressure} mb, '
+            f'Path length = {self.path_length} m\n'
+            f'Gases:'
+        )
+        for gas in self.gases.keys():
+            output += f' {gas}'
+        return output
