@@ -91,7 +91,7 @@ class Analyser(object):
                  solar_flag=False, obs_height=0.0, update_params=True,
                  residual_limit=10, zero_fill_factor=0, model_padding=50,
                  pts_per_cm=25, apod_function='NB_medium', outfile=None,
-                 tolerance=1e-4, output_ppmm_flag=False):
+                 tolerance=1e-8, output_ppmm_flag=False):
         """Initialise the Analyser."""
         # Generate the RFM object
         logger.debug('Setting up RFM')
@@ -106,11 +106,11 @@ class Analyser(object):
             pts_per_cm=pts_per_cm
         )
 
-        # Calculate the optical depths
+        # Calculate the optical depths of the layers
         self.params = self.rfm.calc_optical_depths(params=params)
 
         # Pull the fitted parameters
-        self.p0 = self.params.get_fit_values_list()
+        self.p0 = self.params.get_free_values_list()
 
         # Store the fit window information
         self.wn_start = float(wn_start)
@@ -229,9 +229,6 @@ class Analyser(object):
         # Extract the region we are interested in
         sub_spec = spectrum.sel(wavenumber=slice(self.wn_start, self.wn_stop))
 
-        # Pull the fit bounds
-        bounds = self.params.get_bounds()
-
         # Perform the fit
         try:
 
@@ -241,7 +238,7 @@ class Analyser(object):
                 sub_spec.wavenumber,
                 sub_spec.to_numpy(),
                 self.p0,
-                bounds=bounds,
+                bounds=self.params.get_bounds(),
                 ftol=self.tolerance
             )
             perr = np.sqrt(np.diag(pcov))
@@ -264,7 +261,7 @@ class Analyser(object):
         if self.update_params and not fit.nerr:
             self.p0 = popt
         else:
-            self.p0 = self.params.get_fit_values_list()
+            self.p0 = self.params.get_free_values_list()
 
         # Write fit results
         if self.outfile is not None:
@@ -280,7 +277,10 @@ class Analyser(object):
                     # If it is a gas parameter, convert if neccissary
                     if param.layer_id is not None:
                         layer = self.params.layers[param.layer_id]
-                        val = layer.get_fit_value(param.name)
+                        if param.vary:
+                            val = layer.get_fit_value(param.name)
+                        else:
+                            val = layer.get_value(param.name)
                         err = layer.get_fit_error(param.name)
 
                         if self.output_ppmm_flag:
@@ -293,7 +293,10 @@ class Analyser(object):
 
                     # Otherwise just pull the parameter
                     else:
-                        val = param.fit_value
+                        if param.vary:
+                            val = param.fit_value
+                        else:
+                            val = param.value
                         err = param.fit_error
 
                     # Write the fit value and error
@@ -328,7 +331,7 @@ class Analyser(object):
 
         # Update the fitted parameter values with those supplied to the forward
         # model
-        for i, key in enumerate(self.params.get_fit_values_dict().keys()):
+        for i, key in enumerate(self.params.get_free_values_dict().keys()):
             par_vals[key] = p0[i]
 
         # Unpack polynomial parameters
@@ -344,8 +347,16 @@ class Analyser(object):
             [len(self.params.layers), len(self.model_grid)]
         )
         for n, layer in enumerate(self.params.layers.values()):
+
+            # Pull the layer temperature
+            temp = par_vals[f'{layer.layer_id}_temperature']
+
+            # Calculate the layer optical depths
             layer_ods[n] = np.asarray([
-                layer.optical_depths[gas] * par_vals[f'{layer.layer_id}_{gas}']
+                np.multiply(
+                    layer.get_cross_section(gas, temp),
+                    par_vals[f'{layer.layer_id}_{gas}']
+                )
                 for gas in layer.gases
             ]).sum(axis=0)
 
@@ -478,6 +489,7 @@ class Analyser(object):
 
         # Apply shift due to FOV effect
         shift = fov_width / 2
+        # shift = 0.01
         shift_wn_grid = wn_grid - shift
         kernel = np.interp(wn_grid, shift_wn_grid, kernel)
         kernel = kernel / kernel.sum(axis=0)
@@ -586,22 +598,31 @@ class FitResult(object):
         # Get dictionary of fitted parameters
         popt_dict = {
             key: popt[i]
-            for i, key in enumerate(self.params.get_fit_values_dict())
+            for i, key in enumerate(self.params.get_free_values_dict())
         }
         perr_dict = {
             key: perr[i]
-            for i, key in enumerate(self.params.get_fit_values_dict())
+            for i, key in enumerate(self.params.get_free_values_dict())
         }
 
         # Add the fit results to each parameter, starting with layers
         for layer in self.params.layers.values():
+
+            # Apply temperature
+            if layer.temperature.vary:
+                key = f'{layer.layer_id}_temperature'
+                if key in popt_dict:
+                    layer.temperature.fit_value = popt_dict[key]
+                    layer.temperature.fit_error = perr_dict[key]
+
+            # Apply gas parameters
             for gas in layer.gases:
                 key = f'{layer.layer_id}_{gas}'
                 if key in popt_dict:
                     layer.gases[gas].fit_value = popt_dict[key]
                     layer.gases[gas].fit_error = perr_dict[key]
 
-        # And repeat for other parameters
+        # And then for other parameters
         for key in self.params.variables:
             if key in popt_dict:
                 self.params.variables[key].fit_value = popt_dict[key]
@@ -718,9 +739,16 @@ class FitResult(object):
             shift_model_grid, offset, spectrum.wavenumber, method='cubic'
         )
 
+        # Get the layer temperature
+        if layer.temperature.vary:
+            temp = layer.temperature.fit_value
+        else:
+            temp = layer.temperature.value
+
         # Calculate the parameter od
         par_od = np.multiply(
-            layer.optical_depths[gas.name], layer.gases[gas.name].fit_value
+            layer.get_cross_section(gas.name, temp),
+            layer.gases[gas.name].fit_value
         )
 
         # Convolve with the ILS and interpolate onto the measurement grid

@@ -1,6 +1,7 @@
 import copy
 import logging
 import numpy as np
+from scipy.interpolate import CubicSpline
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +53,12 @@ class Parameters(object):
             raise ValueError('Cannot have multiple layers with the same ID!')
         self.layers[layer.layer_id] = layer
 
-    def get_fit_values_list(self):
+    def get_free_values_list(self):
         """Return a list of the fitted parameter values."""
         vals_list = []
         for layer in self.layers.values():
+            if layer.temperature.vary:
+                vals_list += [layer.temperature.value]
             vals_list += [gas.value for gas in layer.gases.values() if gas.vary]
 
         vals_list += [(p.value) for p in self.variables.values() if p.vary]
@@ -66,19 +69,23 @@ class Parameters(object):
         """Return a list of all parameter values."""
         vals_list = []
         for layer in self.layers.values():
+            vals_list += [layer.temperature.value]
             vals_list += [gas.value for gas in layer.gases.values()]
 
         vals_list += [(p.value) for p in self.variables.values()]
 
         return vals_list
 
-    def get_fit_values_dict(self):
+    def get_free_values_dict(self):
         """Return a dictionary of the fitted parameter values."""
         vals_dict = {}
         for layer in self.layers.values():
+            layer_id = layer.layer_id
+            if layer.temperature.vary:
+                vals_dict[f'{layer_id}_temperature'] = layer.temperature.value
             for key, gas in layer.gases.items():
                 if gas.vary:
-                    vals_dict[f'{layer.layer_id}_{key}'] = gas.value
+                    vals_dict[f'{layer_id}_{key}'] = gas.value
 
         for key, param in self.variables.items():
             if param.vary:
@@ -90,8 +97,10 @@ class Parameters(object):
         """Return a dictionary of all parameter values."""
         vals_dict = {}
         for layer in self.layers.values():
+            layer_id = layer.layer_id
+            vals_dict[f'{layer_id}_temperature'] = layer.temperature.value
             for key, gas in layer.gases.items():
-                vals_dict[f'{layer.layer_id}_{key}'] = gas.value
+                vals_dict[f'{layer_id}_{key}'] = gas.value
 
         for key, param in self.variables.items():
             vals_dict[key] = param.value
@@ -100,34 +109,40 @@ class Parameters(object):
 
     def get_popt_dict(self):
         """Return a dictionary of the optimised parameters."""
-        popt_dict = {}
+        poptdict = {}
         for layer in self.layers.values():
+            layer_id = layer.layer_id
+            if layer.temperature.vary:
+                poptdict[f'{layer_id}_temperature'] = layer.temperature.fit_value
             for key, gas in layer.gases.items():
                 if gas.vary:
-                    popt_dict[f'{layer.layer_id}_{key}'] = gas.fit_value
+                    poptdict[f'{layer.layer_id}_{key}'] = gas.fit_value
 
         for key, param in self.variables.items():
             if param.vary:
-                popt_dict[key] = param.fit_value
+                poptdict[key] = param.fit_value
 
-        return popt_dict
+        return poptdict
 
     def get_popt_list(self):
         """Return a list of the optimised parameters."""
-        vals_list = []
+        poptlist = []
         for layer in self.layers.values():
-            vals_list += [
+            if layer.temperature.vary:
+                poptlist += [layer.temperature.fit_value]
+            poptlist += [
                 gas.fit_value for gas in layer.gases.values() if gas.vary
             ]
 
-        vals_list += [(p.fit_value) for p in self.variables.values() if p.vary]
+        poptlist += [(p.fit_value) for p in self.variables.values() if p.vary]
 
-        return vals_list
+        return poptlist
 
     def get_all_parameters(self):
         """Get a dictionary of all parameters."""
         params_dict = {}
         for layer in self.layers.values():
+            params_dict[f'{layer.layer_id}_temperature'] = layer.temperature
             for key, gas in layer.gases.items():
                 params_dict[f'{layer.layer_id}_{key}'] = gas
 
@@ -142,6 +157,10 @@ class Parameters(object):
         hi_bounds = []
 
         for layer in self.layers.values():
+            if layer.temperature.vary:
+                lo_bounds += [layer.temperature.bounds[0]]
+                hi_bounds += [layer.temperature.bounds[1]]
+
             lo_bounds += [
                 gas.bounds[0] for gas in layer.gases.values() if gas.vary
             ]
@@ -166,7 +185,18 @@ class Parameters(object):
         # Add layer information
         for layer in self.layers.values():
             msg += f'\n{layer.layer_id} layer:'
-            msg += f'\n    Temperature: {layer.temperature} K (fixed)'
+            msg += f'\n    Temperature: {layer.temperature.value} K'
+            if layer.temperature.vary:
+                b1, b2 = layer.temperature.bounds
+                msg += f' (free [{b1} / {b2}])'
+                if not np.isnan(layer.temperature.fit_value):
+                    fit_value = layer.temperature.fit_value
+                    fit_error = layer.temperature.fit_error
+                    msg += f' -> {fit_value:.5g} (± {fit_error:.5g})'
+            else:
+                msg += ' (fixed)'
+
+
             msg += f'\n    Pressure: {layer.pressure} mb (fixed)'
             msg += f'\n    Path Length: {layer.path_length} m (fixed)'
 
@@ -174,8 +204,8 @@ class Parameters(object):
             for gas in layer.gases.values():
                 msg += f'\n    {gas.name}: {layer.get_value(gas.name):.4g}'
                 if gas.vary:
-                    bounds = layer.get_bounds(gas.name)
-                    msg += f' (free [{bounds[0]} / {bounds[1]}])'
+                    b1, b2 = layer.get_bounds(gas.name)
+                    msg += f' (free [{b1} / {b2}])'
                 else:
                     msg += ' (fixed)'
 
@@ -249,8 +279,9 @@ class Parameter(object):
 class Layer(object):
     """Layer class to hold settings for individual atmospheric layers."""
 
-    def __init__(self, layer_id, temperature=293.15, pressure=1013.25,
-                 path_length=100, atmos_flag=False):
+    def __init__(self, layer_id, temperature=298.15, pressure=1013.25,
+                 path_length=100, atmos_flag=False, vary_temperature=False,
+                 temperature_bounds=[273.15, 323.15], temperature_step=1):
         """Initialise the object.
 
         Parameters
@@ -258,7 +289,7 @@ class Layer(object):
         layer_id : string
             Unique ID string for the layer
         temperature : float, optional
-            Layer temperature (in degrees K), by default 293.15
+            Layer temperature (in degrees K), by default 293
         pressure : float, optional
             Layer pressure (in millibars), by default 1013.25
         path_length : int, optional
@@ -266,17 +297,30 @@ class Layer(object):
         atmos_flag : bool, optional
             If True, then sets up a whole atmosphere layer (for use in solar
             occultation measurements), by default False
+        vary_temperature: bool, optional
+            If True, then temperature is included in the fit, by default False
+        temperature_bounds : tuple, optional
+            If vary_temperature is True, then temperature_bounds sets the fit
+            low and high bounds (in Kelvin) for the temperature Parameter, by
+            default [273.15, 323.15]
+        temperature_step : float, optional
+            Sets the step (in Kelvin) in temperature to use when calculating the
+            optical depth array for each gas in the layer, by default 1
         """
 
         self.gases = {}
-        self.optical_depths = {}
+        self.cross_sections = {}
         self.path_amounts = {}
-
+        self.interpolators = {}
         self.layer_id = layer_id
         self.atmos_flag = atmos_flag
 
         if not atmos_flag:
-            self.temperature = temperature
+            self.temperature = Parameter(
+                name='temperature', value=temperature, vary=vary_temperature,
+                bounds=temperature_bounds
+            )
+            self.temperature_step = temperature_step
             self.pressure = pressure
             self.path_length = path_length
         else:
@@ -314,38 +358,72 @@ class Layer(object):
     def get_value(self, gas):
         """Return the scaled gas initial amount."""
         try:
-            return self.gases[gas].value * self.path_amounts[gas]
+            path_amt = self.cross_sections[gas].path_amount.data[0]
+            return self.gases[gas].value * path_amt
         except KeyError:
             return self.gases[gas].value
 
     def get_bounds(self, gas):
         """Return the scaled gas bounds."""
         try:
-            return np.multiply(self.gases[gas].bounds, self.path_amounts[gas])
+            path_amt = self.cross_sections[gas].path_amount.data[0]
+            return np.multiply(self.gases[gas].bounds, path_amt)
         except KeyError:
             return self.gases[gas].bounds
+
+    def get_value(self, gas):
+        """Return the scaled gas initial amount."""
+        try:
+            path_amt = self.cross_sections[gas].path_amount.data[0]
+            return self.gases[gas].value * path_amt
+        except KeyError:
+            return self.gases[gas].value
 
     def get_fit_value(self, gas):
         """Return the scaled gas fitted amount."""
         try:
-            return self.gases[gas].fit_value * self.path_amounts[gas]
+            path_amt = self.cross_sections[gas].path_amount.data[0]
+            return self.gases[gas].fit_value * path_amt
         except KeyError:
             return self.gases[gas].fit_value
 
     def get_fit_error(self, gas):
         """Return the scaled gas fitted amount."""
         try:
-            return self.gases[gas].fit_error * self.path_amounts[gas]
+            path_amt = self.cross_sections[gas].path_amount.data[0]
+            return self.gases[gas].fit_error * path_amt
         except KeyError:
             self.gases[gas].fit_error
+
+    def set_cross_section(self, gas, cross_section):
+
+        # Store the cross section and path amount for that gas
+        self.cross_sections[gas] = cross_section
+
+        # If temperature is varying, perform a cubic interpolation and store the
+        # interpolator for future use
+        if self.temperature.vary:
+            self.interpolators[gas] = CubicSpline(
+                cross_section.temperature.data,
+                cross_section.optical_depth.data
+            )
+
+    def get_cross_section(self, gas, temperature=None):
+        # If varying the temperature, interpolate between stored cross-sections
+        if self.temperature.vary:
+            return self.interpolators[gas](temperature)
+
+        # Otherwise just return the given optical depth cross-section
+        else:
+            return self.cross_sections[gas].optical_depth.data[0]
 
     def __repr__(self):
         """Nice printing behaviour."""
         output = str(
-            f'Layer "{self.layer_id}": '
-            f'Temperature = {self.temperature} K, '
-            f'Pressure = {self.pressure} mb, '
-            f'Path length = {self.path_length} m\n'
+            f'Layer "{self.layer_id}":'
+            f'\nTemperature = {self.temperature}'
+            f'\nPressure = {self.pressure}'
+            f'\nPath length = {self.path_length}\n'
             f'Gases:'
         )
         for gas in self.gases.keys():
