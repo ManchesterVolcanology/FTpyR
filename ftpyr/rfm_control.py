@@ -65,7 +65,7 @@ class RFM(object):
         self.solar_flag = bool(solar_flag)
         self.pts_per_cm = int(pts_per_cm)
         self.obs_height = float(obs_height)
-        self.progress_bars = True
+        self.progress_bars = progress_bars
 
         # Perform input checks ================================================
         # Check the RFM working directory isn't the current one

@@ -212,7 +212,7 @@ class Parameters(object):
                 if not np.isnan(gas.fit_value):
                     fit_value = layer.get_fit_value(gas.name)
                     fit_error = layer.get_fit_error(gas.name)
-                    msg += f' -> {fit_value:.4g} (± {fit_error:.4g})'
+                    msg += f' -> {fit_value:.4} (± {fit_error:.4})'
 
         # Add other parameters
         msg += '\nOther Parameters:'
@@ -224,7 +224,7 @@ class Parameters(object):
                 msg += ' (fixed)'
 
             if not np.isnan(param.fit_value):
-                msg += f' -> {param.fit_value:.4g} (± {param.fit_error:.4g})'
+                msg += f' -> {param.fit_value:.4} (± {param.fit_error:.4})'
 
         return msg
 
