@@ -91,7 +91,8 @@ class Analyser(object):
                  solar_flag=False, obs_height=0.0, update_params=True,
                  residual_limit=10, zero_fill_factor=0, model_padding=50,
                  pts_per_cm=25, apod_function='NB_medium', outfile=None,
-                 tolerance=1e-8, output_ppmm_flag=False):
+                 tolerance=1e-8, output_ppmm_flag=False,
+                 progress_bars=True):
         """Initialise the Analyser."""
         # Generate the RFM object
         logger.debug('Setting up RFM')
@@ -103,7 +104,8 @@ class Analyser(object):
             model_padding=model_padding,
             solar_flag=solar_flag,
             obs_height=obs_height,
-            pts_per_cm=pts_per_cm
+            pts_per_cm=pts_per_cm,
+            progress_bars=progress_bars
         )
 
         # Calculate the optical depths of the layers

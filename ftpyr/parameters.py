@@ -180,7 +180,7 @@ class Parameters(object):
     def __repr__(self) -> str:
         """Nice printing."""
 
-        msg = 'FTpyR Parameters object:'
+        msg = 'FTpyR Parameters:'
 
         # Add layer information
         for layer in self.layers.values():

@@ -208,13 +208,14 @@ class RFM(object):
                         # the a priori temperature
                         scaled_vmr = gas_vmr * layer.temperature.value / temp
 
-                        logger.debug(
-                            f'Running RFM for {gas} '
-                            f'at {temp} K, '
-                            f'{layer.pressure} mb, '
-                            f'path length {layer.path_length} m '
-                            f'and VMR {scaled_vmr:.3E} ppm'
-                        )
+                        if not self.progress_bars:
+                            logger.info(
+                                f'Running RFM for {gas} '
+                                f'at {temp} K, '
+                                f'{layer.pressure} mb, '
+                                f'path length {layer.path_length} m '
+                                f'and VMR {scaled_vmr:.3E} ppm'
+                            )
 
                         # Execute RFM
                         kwargs = dict(
