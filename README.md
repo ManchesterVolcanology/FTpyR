@@ -1,18 +1,22 @@
 # FTpyR
 
-Python library for analysing Open Path Fourier Transform InfraRed (OP-FTIR) spectra of volcanic gases.
+Python program for analysing Open Path Fourier Transform InfraRed (OP-FTIR) spectra of volcanic gases.
 
 ## Overview
 
-This library is designed to fit absorbance FTIR spectra of volcanic plumes to retrieve the column amounts of various volcanic gases of interest along the line of sight. Included is a Graphical User Iterface (GUI) designed to allow easy analysis of FTIR spectra in multiple windows simultaneously, while the FTpyR library is designed to allow for more flexible or batch analysis if required.
+This programis designed to fit absorbance FTIR spectra of volcanic plumes to retrieve the column amounts of various volcanic gases of interest along the line of sight. Included is a Graphical User Iterface (GUI) designed to allow easy analysis of FTIR spectra in multiple windows simultaneously, while the FTpyR library is designed to allow for more flexible or batch analysis if required.
 
 ## Instalation
 
-Currently there is no executable file for the FTpyR GUI, though this is planned. Follow these steps to install the required Python libraries using the Anaconda scientific Python distribution.
+Currently there is no executable file for the FTpyR GUI, though this is planned. Follow these steps to install the required Python libraries. There are two options: using the Anaconda scientific Python distribution or using Python virtual environments.
 
-### Create the environment
+### Clone git repository
 
-Create a new conda environment using the following commands:
+You will need to clone this repository to your computer by either using `git clone https://github.com/benjaminesse/FTpyR.git` or by downloading as a .zip file. This contains all the Python scripts for FTpyR, but not the RFM model.
+
+### Anaconda
+
+You will first need to install [Anaconda ](https://www.anaconda.com/download)or [Miniconda](https://docs.conda.io/projects/miniconda/en/latest/). Once install, you can create a new conda environment using the following commands:
 
 ```
 conda create -n ftir
@@ -27,7 +31,7 @@ conda activate ftir
 The required libaries for basic functionality can be installed using:
 
 ```
-conda install numpy scipy pandas xarray
+conda install -c conda-forge numpy scipy pandas xarray tqdm
 ```
 
 If you want to also use the GUI, then the following are also required:
@@ -48,13 +52,9 @@ This should be everything you need to run FTpyR! To do this, enter the following
 python FTpyR_interface.py
 ```
 
-### Python
+### Python Virtual Environment
 
-To install FTpyR, you will first require Python, which can be downloaded from https://www.python.org/. Once you have this, clone this repoistory to your computer either using `git clone https://github.com/benjaminesse/FTpyR.git` or by downloading as a .zip file.
-
-### Virtual Environment
-
-Next, navigate to your local FTpyR directory and create a virtual environment:
+You will first require Python, which can be downloaded from https://www.python.org/. Once you have Python installed on your system, follow these steps. Navigate to your local FTpyR directory and create a virtual environment:
 
 ```
 python python -m venv venv
@@ -72,22 +72,18 @@ on windows or
 source venv/bin/activate
 ```
 
-on Unix or MacOS. To test the install type `python` and hit enter. This should open an interactive command prompt for python. To exit this type `exit()` and hit enter.
+on Unix or MacOS. To test the install type `python` and hit enter. This should open an interactive command prompt for python. To exit this type `exit()` or `ctrl+Z` and hit enter.
 
-### Libraries
-
-Next we need to install the libraries required for FTpyR.
-
-For basic functionality you only need the following:
+Next we need to install the libraries required for FTpyR. For basic functionality you only need the following:
 
 ```
-pip install numpy scipy pandas xarray
+pip install numpy scipy pandas xarray tqdm
 ```
 
 To use the full GUI you will need the following:
 
 ```
-pip install pyyaml pyqtdarktheme PySide6 pyqtgraph
+pip install pyyaml pyqtdarktheme PySide2 pyqtgraph
 ```
 
 You can then create your own analysis scripts, or to run the GUI program use:
@@ -104,4 +100,3 @@ The following features still require implementation:
 - Simple example script for batch analysis
 - Example script for parallel processing of batch analysis
 - Solar occultaion fitting
-- Release executable files
