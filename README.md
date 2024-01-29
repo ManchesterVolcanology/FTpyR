@@ -92,6 +92,14 @@ You can then create your own analysis scripts, or to run the GUI program use:
 python FTpyR_interface.py
 ```
 
+## Reference Forward Model
+
+FTpyR uses the Reference Forward Model (RFM) developed at AOPP, University of Oxford. The current version of FTpyR uses version RFM v5.12. More details can be found in [this paper](https://doi.org/10.1016/j.jqsrt.2016.06.018) and online at [http://eodg.atm.ox.ac.uk/RFM/](http://eodg.atm.ox.ac.uk/RFM/) (including how to obtain the source code).
+
+## HITRAN
+
+In order to compute otical depths, the RFM requires information on the absorption features of different gases. FTpyR is designed to use the [HITRAN2020 database](https://hitran.org/). The website enables you to download the line-by-line database to a single .par file (defining the wavenumber range and which species to include). This can be read by the RFM directly, or first converted to a .bin format using the [HITBIN](http://eodg.atm.ox.ac.uk/RFM/hitbin.html) program, which will speed up running RFM.
+
 ## To Do
 
 The following features still require implementation:
