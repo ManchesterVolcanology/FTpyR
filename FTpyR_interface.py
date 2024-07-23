@@ -1995,7 +1995,7 @@ class NewWindowWizard(QDialog):
     def accept_action(self):
         """Record the window data and exit."""
         self.info = {
-            'name': str(self.wname.text())}
+            'window': str(self.wname.text())}
         self.accept()
 
     def cancel_action(self):
