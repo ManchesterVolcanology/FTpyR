@@ -1433,30 +1433,23 @@ class MainWindow(QMainWindow):
 
                 # Fit without taking errors into account
                 if not self.widgets.get('ratio_fit_errors'):
-                    popt, pcov = curve_fit(
-                        lin_fit,
-                        xval,
-                        yval,
-                        [m, c]
-                    )
-                    perr = np.sqrt(np.diag(pcov))
+                    myodr = odr.ODR(
+                        data=odr.RealData(x=xval, y=yval),
+                        model=odr.unilinear,
+                        beta0=[m, c]
+                    ).run()
+                    popt = myodr.beta
+                    perr = myodr.sd_beta
 
                 # Fit with taking errors into account
                 else:
-                    data = odr.Data(
-                        x=xval,
-                        y=yval,
-                        wd=np.power(xerr, -1),
-                        we=np.power(yerr, -1)
-                    )
-
                     myodr = odr.ODR(
-                        data,
-                        odr.unilinear,
-                        beta0=[m, c])
-                    out = myodr.run()
-                    popt = out.beta
-                    perr = out.sd_beta
+                        data=odr.RealData(x=xval, y=yval, sx=xerr, sy=yerr),
+                        model=odr.unilinear,
+                        beta0=[m, c]
+                    ).run()
+                    popt = myodr.beta
+                    perr = myodr.sd_beta
 
                 # Make the best fit line
                 yfit = lin_fit(xfit, *popt)
