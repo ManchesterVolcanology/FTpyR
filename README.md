@@ -1,6 +1,6 @@
 # FTpyR
 
-Python program for analysing Open Path Fourier Transform InfraRed (OP-FTIR) spectra of volcanic gases. This project builds on IDL software written by Mike Burton (see [https://doi.org/10.1126/science.1141900](here) for details).
+Python program for analysing Open Path Fourier Transform InfraRed (OP-FTIR) spectra of volcanic gases. This project builds on IDL software written by Mike Burton (see [https://doi.org/10.1126/science.1141900](here) for details). This Python software is still in development, and so all results should be treated as preliminary and handled with caution.
 
 ## Overview
 
